@@ -95,7 +95,7 @@ def is_inappropriate(text: str) -> bool:
 
 
 def strip_links(text: str) -> str:
-    return re.sub(r'https?://\S+', '[LINK REMOVED]', text)
+    return re.sub(r'http?://\S+', '[LINK REMOVED]', text)
 
 
 async def init_db():
@@ -524,7 +524,7 @@ async def on_message(message: discord.Message):
             ][-5:]
             reply = await tars_ai_respond(last_message, message.author.display_name, context_messages,
                                           user=message.author)
-            link_count = len(re.findall(r'https?://\S+', reply))
+            link_count = len(re.findall(r'http?://\S+', reply))
             if link_count > 0:
                 logger.warning(f"Blocked AI response containing {link_count} links: {reply}")
                 await message.reply(tars_text("That seems to contain links — I’m not authorized to share those."))
