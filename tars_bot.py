@@ -260,7 +260,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         await add_boost_points(after.id, points_awarded)
         await helper_moderation.send_mod_log(
             after.guild,
-            f"{after.mention} boosted the server! (+{points_awarded} Boost Points)"
+            f"{after.mention} boosted the server! (+{points_awarded} Boost Points)",
+            ping_staff=False
         )
         try:
             await after.send(
@@ -270,7 +271,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     elif before.premium_since and not after.premium_since:
         await helper_moderation.send_mod_log(
             after.guild,
-            f"{after.mention} stopped boosting the server."
+            f"{after.mention} stopped boosting the server.",
+            ping_staff=False
         )
 
 
@@ -371,14 +373,20 @@ async def on_member_join(member: discord.Member):
     while recent_joins and (now - recent_joins[0][0]).total_seconds() > 60:
         recent_joins.pop(0)
     if len(recent_joins) >= 6:
-        await helper_moderation.send_mod_log(member.guild,
-                                             f"Possible raid detected: {len(recent_joins)} joins in last minute.")
+        await helper_moderation.send_mod_log(
+            member.guild,
+            f"Possible raid detected: {len(recent_joins)} joins in last minute.",
+            ping_staff=True
+        )
 
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    await helper_moderation.send_mod_log(member.guild,
-                                         f"**Leave**: {member} ({member.id}) at {datetime.utcnow().isoformat()}")
+    await helper_moderation.send_mod_log(
+        member.guild,
+        f"**Leave**: {member} ({member.id}) at {datetime.utcnow().isoformat()}",
+        ping_staff=False
+    )
 
 
 BAD_NICK_PATTERN = re.compile(r"(nigg|fag|cum|sex)", re.IGNORECASE)
@@ -390,11 +398,18 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         if BAD_NICK_PATTERN.search(after.display_name):
             try:
                 await after.edit(nick=None, reason="Inappropriate nickname filtered by T.A.R.S.")
-                await helper_moderation.send_mod_log(after.guild,
-                                                     f"Reverted nickname for {after} due to inappropriate content: {after.display_name}")
+                await helper_moderation.send_mod_log(
+                    after.guild,
+                    f"Reverted nickname for {after} due to inappropriate content: {after.display_name}",
+                    ping_staff=True
+                )
             except Exception as e:
                 await on_error(e)
-                await helper_moderation.send_mod_log(after.guild, f"Could not revert nickname for {after}: {e}")
+                await helper_moderation.send_mod_log(
+                    after.guild,
+                    f"Could not revert nickname for {after}: {e}",
+                    ping_staff=True
+                )
                 await on_error(e)
 
 
@@ -611,7 +626,8 @@ async def slash_roleinfo(interaction: discord.Interaction, role: discord.Role):
 async def slash_report(interaction: discord.Interaction, user: discord.User, reason: str):
     await interaction.response.send_message(tars_text("Your report has been submitted to staff."), ephemeral=True)
     await helper_moderation.send_mod_log(interaction.guild,
-                                         f"**Report**\nReporter: {interaction.user} ({interaction.user.id})\nReported: {user} ({user.id})\nReason: {reason}\nChannel: {interaction.channel.mention}")
+                                         f"**Report**\nReporter: {interaction.user} ({interaction.user.id})\nReported: {user} ({user.id})\nReason: {reason}\nChannel: {interaction.channel.mention}",
+                                         ping_staff=True)
 
 
 @tree.command(name="quote", description="Quote a message by link or ID")
@@ -1010,7 +1026,8 @@ async def slash_boostpoints_add(interaction: discord.Interaction, member: discor
     )
     await helper_moderation.send_mod_log(
         interaction.guild,
-        f"Admin {interaction.user.mention} added **{amount} Boost Points** to {member.mention}. New total: {points}."
+        f"Admin {interaction.user.mention} added **{amount} Boost Points** to {member.mention}. New total: {points}.",
+        ping_staff=False
     )
 
 
