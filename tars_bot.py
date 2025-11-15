@@ -31,7 +31,7 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 
 FABI_ID = 392388537984745498
-BOT_VERSION = "5.2.9"
+BOT_VERSION = "5.2.10"
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
