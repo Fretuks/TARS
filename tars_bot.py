@@ -409,7 +409,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                 await helper_moderation.send_mod_log(
                     after.guild,
                     f"Could not revert nickname for {after}: {e}",
-                    ping_staff=True
+                    ping_staff=False
                 )
                 await on_error(e)
 
@@ -641,7 +641,7 @@ async def slash_report(interaction: discord.Interaction, user: discord.User, rea
     await interaction.response.send_message(tars_text("Your report has been submitted to staff."), ephemeral=True)
     await helper_moderation.send_mod_log(interaction.guild,
                                          f"**Report**\nReporter: {interaction.user} ({interaction.user.id})\nReported: {user} ({user.id})\nReason: {reason}\nChannel: {interaction.channel.mention}",
-                                         ping_staff=True)
+                                         ping_staff=False)
 
 
 @tree.command(name="quote", description="Quote a message by link or ID")
