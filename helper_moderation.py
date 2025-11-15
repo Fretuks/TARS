@@ -149,7 +149,7 @@ async def handle_moderation(message):
                 ping_staff=(count >= WARN_THRESHOLD)
             )
             return
-    if any(w in text for w in DRUG_KEYWORDS):
+    if any(re.search(rf"\b{re.escape(w)}\b", text, re.IGNORECASE) for w in DRUG_KEYWORDS):
         count = await increment_warning(uid)
         await add_warn_log(uid, "Drug mention")
         await message.channel.send(
