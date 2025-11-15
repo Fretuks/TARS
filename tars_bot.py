@@ -31,6 +31,7 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 
 FABI_ID = 392388537984745498
+BOT_VERSION = "5.2.8"
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
@@ -555,6 +556,14 @@ async def on_message(message: discord.Message):
 
 @tree.command(name="tars", description="Activate T.A.R.S. and show available commands")
 async def slash_tars(interaction: discord.Interaction):
+    version = BOT_VERSION  # pull current version
+
+    intro = tars_text(
+        f"T.A.R.S. online. Systems nominal.\n**Current Version:** `{version}`\n"
+        "You can address me directly or use the following commands.",
+        "info"
+    )
+
     mod_embed = tars_embed(
         "Moderation Systems Online",
         "/tarsreport — report a user\n"
@@ -564,6 +573,7 @@ async def slash_tars(interaction: discord.Interaction):
         "/addbannedword — add banned word to auto-delete list\n"
         "/listbannedwords — view banned words list\n"
     )
+
     util_embed = tars_embed(
         "Utility Subroutines",
         "/userinfo — get user info\n"
@@ -574,6 +584,7 @@ async def slash_tars(interaction: discord.Interaction):
         "/getquote — retrieve a saved quote\n"
         "/setmotd — configure the message of the day\n"
     )
+
     fun_embed = tars_embed(
         "Recreational Protocols",
         "/8ball — Magic 8-ball\n"
@@ -581,9 +592,12 @@ async def slash_tars(interaction: discord.Interaction):
         "/quote — save message quotes\n"
         "/ping — check T.A.R.S. responsiveness"
     )
-    intro = tars_text("T.A.R.S. online. Systems nominal. You can address me directly or use the following commands.",
-                      "info")
-    await interaction.response.send_message(intro, embeds=[mod_embed, util_embed, fun_embed], ephemeral=False)
+
+    await interaction.response.send_message(
+        intro,
+        embeds=[mod_embed, util_embed, fun_embed],
+        ephemeral=False
+    )
 
 
 @tree.command(name="userinfo", description="Get info about a user")
