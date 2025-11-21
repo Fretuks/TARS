@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import logging
 from tars import tars_text
 from config import STAFF_ROLES_FOR_PING, recent_messages, recent_message_timestamps, \
-    NWORD_PATTERN, SUICIDE_PATTERNS, DRUG_KEYWORDS, DB_FILE
+    NWORD_PATTERN, SUICIDE_PATTERNS, DRUG_KEYWORDS, DB_FILE, IMMUNITY_ROLES
 
 logger = logging.getLogger("tars")
 WARN_THRESHOLD = 3
@@ -19,6 +19,8 @@ async def handle_moderation(message):
     if message.author.bot:
         return
     if any(role.name in STAFF_ROLES_FOR_PING for role in message.author.roles):
+        return
+    if any(role.name in IMMUNITY_ROLES for role in message.author.roles):
         return
     text = message.content or ""
     uid = str(message.author.id)

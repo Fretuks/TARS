@@ -12,6 +12,7 @@ BANNED_WORDS = [
     "rape", "porn", "sex", "cock", "cum", "slut", "whore", "kys", "nigga"
 ]
 STAFF_ROLES_FOR_PING = ["GetAnnoyedByTars"]
+IMMUNITY_ROLES = ["Senior Admin, Head Admin, Co-Owner, Owner"]
 recent_messages = {}
 recent_message_timestamps = {}
 recent_joins = []
