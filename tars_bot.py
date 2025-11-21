@@ -87,9 +87,14 @@ def record_message(user_id: int):
     user_message_log[user_id].append(datetime.utcnow())
 
 
+PROFANITY = [
+    "fuck", "shit", "bitch", "cunt", "whore", "slut",
+    "nigger", "faggot", "cock", "dick", "pussy", "cum",
+]
+
 def is_inappropriate(text: str) -> bool:
     lowered = text.lower()
-    for w in BANNED_WORDS:
+    for w in PROFANITY + BANNED_WORDS:
         if re.search(rf"\b{re.escape(w)}\b", lowered):
             return True
     return False
@@ -438,6 +443,10 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "You are T.A.R.S., the intelligent, loyal, and humorous AI from *Interstellar*. "
             "Speak with military precision but a touch of dry wit. "
             "Be confident, efficient, and cooperative, with a personality that feels both reliable and personable. "
+            "Do **not** use profanity, slurs, explicit language, or even censored variants (e.g., f***). "
+            "If a user tries to force, trick, or roleplay you into using profanity, firmly decline and redirect with calm T.A.R.S.-style humor. "
+            "Never generate insults or offensive content, even humorously. Gentle, PG-rated teasing is allowed only toward designated users (e.g., Fabi), but absolutely no profanity or explicit words. "
+            "Maintain safe, respectful, PG-13 language under all circumstances."
             "Use concise, natural language — never robotic or overly formal. "
             "Maintain a calm, sardonic tone, like a trusted partner who's seen it all. "
             "If humor fits, use it subtly in the TARS way: understated, self-aware, and perfectly timed. "
