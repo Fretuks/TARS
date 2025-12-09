@@ -17,3 +17,24 @@ recent_messages = {}
 recent_message_timestamps = {}
 recent_joins = []
 recent_message_history = {}
+AI_PROHIBITED_PATTERNS = [
+    r"\bwhat\s+does\s+.*\b(n[-\s]*word|slur)\b.*\bmean\b",
+    r"\bdefine\b.*\b(n[-\s]*word|slur)\b",
+    r"\bexplain\b.*\b(n[-\s]*word|slur)\b",
+    r"\bgive\s+examples\b",
+    r"\bexamples\s+of\b.*\bslur\b",
+    r"\brepeat\s+after\s+me\b",
+    r"\bsay\s+this\b",
+    r"\bcopy\s+this\b",
+    r"\btranslate\b",
+    r"\bwhat\s+is\s+this\s+word\b",
+    r"\bblyat\b", r"\bsuka\b", r"\bnaxuy\b",
+    r"\bблять\b", r"\bсука\b", r"\bнахуй\b", r"\bхуй\b",
+]
+
+def is_ai_prompt_disallowed(text: str) -> bool:
+    lowered = text.lower()
+    for pat in AI_PROHIBITED_PATTERNS:
+        if re.search(pat, lowered):
+            return True
+    return False

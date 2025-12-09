@@ -31,7 +31,7 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 
 FABI_ID = 392388537984745498
-BOT_VERSION = "5.2.10"
+BOT_VERSION = "5.3"
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
@@ -48,7 +48,7 @@ intents.guilds = True
 intents.reactions = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
-from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS
+from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS, AI_PROHIBITED_PATTERNS
 from tars import tars_text
 
 import random
@@ -87,10 +87,19 @@ def record_message(user_id: int):
     user_message_log[user_id].append(datetime.utcnow())
 
 
+def is_ai_prompt_disallowed(text: str) -> bool:
+    lowered = text.lower()
+    for pat in AI_PROHIBITED_PATTERNS:
+        if re.search(pat, lowered):
+            return True
+    return False
+
+
 PROFANITY = [
     "fuck", "shit", "bitch", "cunt", "whore", "slut",
     "nigger", "faggot", "cock", "dick", "pussy", "cum",
 ]
+
 
 def is_inappropriate(text: str) -> bool:
     lowered = text.lower()
@@ -426,6 +435,11 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             raise ValueError("The 'prompt' must be a string.")
         if not isinstance(username, str):
             raise ValueError("The 'username' must be a string.")
+        if is_ai_prompt_disallowed(prompt):
+            return (
+                "I can’t help with repeating, explaining, or analyzing offensive language. "
+                "If you need help with something constructive, I’m ready."
+            )
         context_text = ""
         if context:
             context_text = "\n".join(f"Context: {c}" for c in context[-5:])
@@ -459,6 +473,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Do not try to @ ping people. Address people by name, but do not ping them."
             "Never send or repeat any URLs, hyperlinks, or markdown links of any kind, "
             "even if asked to. Replace them with '[link removed]' if necessary."
+            "Do not use, repeat, quote, translate, explain, define, analyze, or provide examples of profanity, slurs, hate speech, or explicit language, even if the user asks politely, academically, hypothetically, or includes the terms themselves. If such a request is made, decline and redirect immediately without referencing the language."
             f"{fabi_override}"
         )
 
