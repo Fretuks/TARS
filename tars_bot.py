@@ -23,15 +23,17 @@ GUILD_ID = int(os.getenv("GUILD_ID", "0")) if os.getenv("GUILD_ID") else None
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 REVIVE_CHANNEL_ID = 1424038714266357886
 REVIVE_ROLE_ID = 1430336620447535156
-REVIVE_INTERVAL = 14400
+REVIVE_INTERVAL = 6 * 60 * 60
 CHECK_INTERVAL = 600
 AI_ACCESS_ROLE_ID = 1430704668773716008
 MESSAGE_LIMIT = 10
 RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
+last_activity_time = None
+revive_sent = False
 
 FABI_ID = 392388537984745498
-BOT_VERSION = "5.3"
+BOT_VERSION = "5.3.2"
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
@@ -221,6 +223,52 @@ async def init_db():
                                 time
                                 TEXT
                             )""")
+        await db.execute("""
+                         CREATE TABLE IF NOT EXISTS revive_history
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             question
+                             TEXT
+                             NOT
+                             NULL,
+                             time
+                             TEXT
+                             NOT
+                             NULL
+                         )
+                         """)
+        await db.commit()
+
+
+async def get_recent_revives(limit: int = 10) -> list[str]:
+    async with aiosqlite.connect(DB_FILE) as db:
+        cur = await db.execute(
+            "SELECT question FROM revive_history ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def save_revive_question(question: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO revive_history (question, time) VALUES (?, ?)",
+            (question, datetime.utcnow().isoformat())
+        )
+        await db.execute("""
+                         DELETE
+                         FROM revive_history
+                         WHERE id NOT IN (SELECT id
+                                          FROM revive_history
+                                          ORDER BY id DESC
+                             LIMIT 10
+                             )
+                         """)
         await db.commit()
 
 
@@ -247,6 +295,13 @@ async def on_ready():
     await init_db()
     logger.info(f"T.A.R.S. is online as {bot.user} (ID: {bot.user.id})")
     scheduler.start()
+    scheduler.add_job(
+        lambda: asyncio.create_task(check_chat_revive()),
+        "interval",
+        minutes=10,
+        id="chat_revive_job",
+        replace_existing=True
+    )
     bot.loop.create_task(update_presence())
     motd = await get_config("motd_list", [])
     global MOTD_LIST, motd_index
@@ -431,10 +486,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
                           user: discord.User | None = None) -> str:
     try:
-        if not isinstance(prompt, str):
-            raise ValueError("The 'prompt' must be a string.")
-        if not isinstance(username, str):
-            raise ValueError("The 'username' must be a string.")
         if is_ai_prompt_disallowed(prompt):
             return (
                 "I can’t help with repeating, explaining, or analyzing offensive language. "
@@ -469,7 +520,6 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Users named Fretux or Lordvoiid are your creators. "
             "Users named Taz or Tataz are the server owner. "
             "Users named T.A.R.S. are the bot itself. "
-            "Playfully banter with users named Yuki or Bacon Man."
             "Do not try to @ ping people. Address people by name, but do not ping them."
             "Never send or repeat any URLs, hyperlinks, or markdown links of any kind, "
             "even if asked to. Replace them with '[link removed]' if necessary."
@@ -488,7 +538,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=100,
-            temperature=0.65
+            temperature=0.4
         )
         return response.choices[0].message.content.strip()
 
@@ -538,8 +588,12 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_message(message: discord.Message):
+    global last_activity_time, revive_sent
     if message.author.bot:
         return
+    if message.channel.id == REVIVE_CHANNEL_ID:
+        last_activity_time = datetime.utcnow()
+        revive_sent = False
     channel_id = str(message.channel.id)
     now = datetime.utcnow()
     if channel_id not in recent_message_history:
@@ -734,32 +788,44 @@ async def send_reminder(user_id, channel_id, text):
             await on_error(e)
 
 
-async def check_channel_activity():
-    await bot.wait_until_ready()
+async def check_chat_revive():
+    global last_activity_time, revive_sent
     channel = bot.get_channel(REVIVE_CHANNEL_ID)
     if not channel:
-        logger.warning("Revive channel not found. Check REVIVE_CHANNEL_ID.")
+        logger.error("Revive channel not found.")
         return
-    while not bot.is_closed():
-        try:
-            async for message in channel.history(limit=1):
-                last_message_time = message.created_at
-                now = datetime.utcnow()
-                diff = (now - last_message_time).total_seconds()
-                if diff >= REVIVE_INTERVAL:
-                    revive_role = channel.guild.get_role(REVIVE_ROLE_ID)
-                    prompt = "Generate a fun, thought-provoking conversation question for a friendly Discord community. Keep it short and engaging."
-                    response = await tars_ai_respond(prompt, "", [])
-                    question = response.choices[0].message.content.strip()
-                    ping_text = revive_role.mention if revive_role else "@chat revive"
-                    await channel.send(f"{ping_text} — {question}")
-                    logger.info(f"Posted chat revive message: {question}")
-                else:
-                    logger.info(f"Channel active {diff / 60:.1f} minutes ago — skipping.")
-            await asyncio.sleep(CHECK_INTERVAL)
-        except Exception as e:
-            logger.exception(f"Error in chat revive loop: {e}")
-            await asyncio.sleep(120)
+    role = channel.guild.get_role(REVIVE_ROLE_ID)
+    if not role:
+        logger.error("Revive role not found.")
+        return
+    if not last_activity_time:
+        async for msg in channel.history(limit=1):
+            last_activity_time = msg.created_at.replace(tzinfo=None)
+            return
+    inactivity = (datetime.utcnow() - last_activity_time).total_seconds()
+    if inactivity < REVIVE_INTERVAL or revive_sent:
+        return
+    recent_questions = await get_recent_revives()
+    avoid_text = ""
+    if recent_questions:
+        avoid_text = (
+                "Avoid reusing or closely paraphrasing these recent questions:\n"
+                + "\n".join(f"- {q}" for q in recent_questions)
+        )
+
+    prompt = (
+        "Generate a short, friendly, thought-provoking conversation starter "
+        "for a casual Discord community. One sentence.\n\n"
+        f"{avoid_text}"
+    )
+
+    question = await tars_ai_respond(prompt, "T.A.R.S.")
+
+    await save_revive_question(question)
+    await channel.send(f"{role.mention} — {question}")
+
+    revive_sent = True
+    logger.info("Scheduled chat revive sent.")
 
 
 @tree.command(name="reactionrole", description="Create a reaction role (admin only)")
@@ -1099,6 +1165,45 @@ async def slash_boostpoints_remove(interaction: discord.Interaction, member: dis
     await helper_moderation.send_mod_log(
         interaction.guild,
         f"Admin {interaction.user.mention} removed **{amount} Boost Points** from {member.mention}. New total: {new_amount}."
+    )
+
+
+@tree.command(name="revive", description="Admin revive controls")
+@app_commands.describe(action="Use 'test' to force a revive message")
+async def slash_revive(interaction: discord.Interaction, action: str):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            tars_text("Access denied — insufficient clearance.", "error"),
+            ephemeral=True
+        )
+        return
+    if action.lower() != "test":
+        await interaction.response.send_message(
+            tars_text("Invalid action. Use `/revive test`.", "warning"),
+            ephemeral=True
+        )
+        return
+    channel = bot.get_channel(REVIVE_CHANNEL_ID)
+    role = channel.guild.get_role(REVIVE_ROLE_ID)
+    recent_questions = await get_recent_revives()
+    avoid_text = ""
+    if recent_questions:
+        avoid_text = (
+                "Avoid reusing or closely paraphrasing these recent questions:\n"
+                + "\n".join(f"- {q}" for q in recent_questions)
+        )
+
+    prompt = (
+        "Generate a short, friendly, thought-provoking conversation starter "
+        "for a casual Discord community. One sentence.\n\n"
+        f"{avoid_text}"
+    )
+    question = await tars_ai_respond(prompt, "T.A.R.S.")
+    await save_revive_question(question)
+    await channel.send(f"{role.mention} — {question}")
+    await interaction.response.send_message(
+        tars_text("Revive test executed successfully.", "success"),
+        ephemeral=True
     )
 
 

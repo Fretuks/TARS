@@ -11,8 +11,8 @@ BANNED_WORDS = [
     "nigger", "faggot", "retard", "kike", "chink", "spic",
     "rape", "porn", "sex", "cock", "cum", "slut", "whore", "kys", "nigga"
 ]
-STAFF_ROLES_FOR_PING = ["GetAnnoyedByTars"]
-IMMUNITY_ROLES = ["Senior Admin, Head Admin, Co-Owner, Owner"]
+STAFF_ROLES_FOR_PING = [1439247653517918289]
+IMMUNITY_ROLES = [1429917902341017731, 1429449866588717167, 1425274144882298890, 1425274034219651162]
 recent_messages = {}
 recent_message_timestamps = {}
 recent_joins = []

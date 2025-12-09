@@ -15,12 +15,17 @@ logger = logging.getLogger("tars")
 WARN_THRESHOLD = 3
 
 
+def is_user_immune(member: discord.Member) -> bool:
+    return any(
+        role.id in IMMUNITY_ROLES or role.id in STAFF_ROLES_FOR_PING
+        for role in member.roles
+    )
+
+
 async def handle_moderation(message):
     if message.author.bot:
         return
-    if any(role.name in STAFF_ROLES_FOR_PING for role in message.author.roles):
-        return
-    if any(role.name in IMMUNITY_ROLES for role in message.author.roles):
+    if is_user_immune(message.author):
         return
     text = message.content or ""
     uid = str(message.author.id)
@@ -64,7 +69,11 @@ async def handle_moderation(message):
         )
         return
 
-    ping_count = sum(text.count(role.mention) for role in g.roles if role.name in STAFF_ROLES_FOR_PING)
+    ping_count = sum(
+        text.count(role.mention)
+        for role in g.roles
+        if role.id in STAFF_ROLES_FOR_PING
+    )
     if ping_count > 4:
         count = await increment_warning(uid)
         await add_warn_log(uid, "Excessive staff pinging")
