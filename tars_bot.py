@@ -296,7 +296,7 @@ async def on_ready():
     logger.info(f"T.A.R.S. is online as {bot.user} (ID: {bot.user.id})")
     scheduler.start()
     scheduler.add_job(
-        lambda: asyncio.create_task(check_chat_revive()),
+        lambda: bot.loop.create_task(check_chat_revive()),
         "interval",
         minutes=10,
         id="chat_revive_job",
@@ -826,8 +826,8 @@ async def check_chat_revive():
     avoid_text = ""
     if recent_questions:
         avoid_text = (
-            "Avoid reusing or closely paraphrasing these recent questions:\n"
-            + "\n".join(f"- {q}" for q in recent_questions)
+                "Avoid reusing or closely paraphrasing these recent questions:\n"
+                + "\n".join(f"- {q}" for q in recent_questions)
         )
     prompt = (
         "Generate a short, friendly, thought-provoking conversation starter "

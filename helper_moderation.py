@@ -27,6 +27,8 @@ async def handle_moderation(message):
         return
     if is_user_immune(message.author):
         return
+    if message.guild is None:
+        return
     text = message.content or ""
     uid = str(message.author.id)
     g = message.guild
