@@ -32,8 +32,10 @@ user_message_log = defaultdict(list)
 last_activity_time = None
 revive_sent = False
 FABI_ID = 392388537984745498
+
 BOT_VERSION = "6.0.0"
 BOT_START_TIME = datetime.utcnow()
+
 LAST_ERROR_TIME: datetime | None = None
 LAST_REVIVE_TIME: datetime | None = None
 FEATURE_FLAGS = {
