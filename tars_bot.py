@@ -31,9 +31,138 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 last_activity_time = None
 revive_sent = False
-
 FABI_ID = 392388537984745498
-BOT_VERSION = "5.4.1"
+BOT_VERSION = "6.0.0"
+BOT_START_TIME = datetime.utcnow()
+LAST_ERROR_TIME: datetime | None = None
+LAST_REVIVE_TIME: datetime | None = None
+FEATURE_FLAGS = {
+    "ai_enabled": True,
+    "revive_enabled": True,
+}
+ERROR_WINDOW = timedelta(seconds=60)
+ERROR_THRESHOLD = 5
+COOLDOWN_PERIOD = timedelta(minutes=10)
+ERROR_LOG: list[datetime] = []
+COOLDOWN_UNTIL: datetime | None = None
+TOPIC_COUNTER = defaultdict(int)
+HOURLY_ACTIVITY = defaultdict(int)
+
+
+async def check_openai_health() -> bool:
+    try:
+        await openai_client.models.list()
+        return True
+    except Exception as e:
+        logger.error(f"OpenAI API is not available: {e}")
+        return False
+
+
+async def check_db_health() -> bool:
+    try:
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("SELECT 1")
+        return True
+    except Exception as e:
+        logger.error(f"Database is not available: {e}")
+        return False
+
+
+def record_error():
+    global LAST_ERROR_TIME, COOLDOWN_UNTIL
+    now = datetime.utcnow()
+    LAST_ERROR_TIME = now
+    ERROR_LOG.append(now)
+    ERROR_LOG[:] = [t for t in ERROR_LOG if now - t <= ERROR_WINDOW]
+    if len(ERROR_LOG) >= ERROR_THRESHOLD and not COOLDOWN_UNTIL:
+        COOLDOWN_UNTIL = now + COOLDOWN_PERIOD
+        FEATURE_FLAGS["ai_enabled"] = False
+        FEATURE_FLAGS["revive_enabled"] = False
+        logger.error("Circuit breaker triggered. Features temporarily disabled.")
+
+
+def check_circuit_recovery():
+    global COOLDOWN_UNTIL
+    if COOLDOWN_UNTIL and datetime.utcnow() >= COOLDOWN_UNTIL:
+        FEATURE_FLAGS["ai_enabled"] = True
+        FEATURE_FLAGS["revive_enabled"] = True
+        COOLDOWN_UNTIL = None
+        ERROR_LOG.clear()
+        logger.info("Circuit breaker reset. Features re-enabled.")
+
+
+def is_dead_hour() -> bool:
+    if not HOURLY_ACTIVITY:
+        return False
+    avg = sum(HOURLY_ACTIVITY.values()) / max(len(HOURLY_ACTIVITY), 1)
+    current = HOURLY_ACTIVITY.get(datetime.utcnow().hour, 0)
+    return current < (avg * 0.5)
+
+
+CONFIG_SCHEMA = {
+    "revive_interval": int,
+    "motd_channel_id": (int, type(None)),
+    "ai_enabled": bool,
+    "revive_enabled": bool,
+}
+
+AI_USAGE = {
+    "by_user": defaultdict(int),
+    "by_channel": defaultdict(int),
+    "tokens": 0,
+    "failures": 0,
+}
+
+
+def get_time_of_day() -> str:
+    hour = datetime.utcnow().hour
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 18:
+        return "afternoon"
+    if 18 <= hour < 23:
+        return "evening"
+    return "late_night"
+
+
+def get_season() -> str:
+    month = datetime.utcnow().month
+    if month in (12, 1, 2):
+        return "winter"
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    return "autumn"
+
+
+REVIVE_STYLE_PROMPTS = {
+    "morning": "Friendly morning icebreaker that encourages people to start chatting.",
+    "afternoon": "Casual, light discussion starter to revive mid-day conversation.",
+    "evening": "Relaxed, social question suitable for evening community chat.",
+    "late_night": "Low-pressure, reflective question suitable for late-night lurkers."
+}
+
+SEASONAL_PROMPTS = {
+    "winter": "Seasonal tone: cozy, reflective, or end-of-year energy.",
+    "spring": "Seasonal tone: fresh ideas, plans, and motivation.",
+    "summer": "Seasonal tone: relaxed, fun, or social energy.",
+    "autumn": "Seasonal tone: thoughtful, nostalgic, or analytical.",
+}
+
+
+def decay_topics():
+    for k in list(TOPIC_COUNTER.keys()):
+        TOPIC_COUNTER[k] *= 0.9
+        if TOPIC_COUNTER[k] < 1:
+            del TOPIC_COUNTER[k]
+
+
+def prune_hourly_activity():
+    now = datetime.utcnow().hour
+    for h in list(HOURLY_ACTIVITY.keys()):
+        if (now - h) % 24 > 6:
+            del HOURLY_ACTIVITY[h]
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
@@ -50,7 +179,7 @@ intents.guilds = True
 intents.reactions = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
-from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS, AI_PROHIBITED_PATTERNS
+from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS, AI_PROHIBITED_PATTERNS, CHANNEL_THEMES
 from tars import tars_text
 
 import random
@@ -103,9 +232,10 @@ PROFANITY = [
 ]
 
 
-def is_inappropriate(text: str) -> bool:
+async def is_inappropriate(text: str) -> bool:
     lowered = text.lower()
-    for w in PROFANITY + BANNED_WORDS:
+    banned = await get_config("banned_words", BANNED_WORDS)
+    for w in PROFANITY + banned:
         if re.search(rf"\b{re.escape(w)}\b", lowered):
             return True
     return False
@@ -295,6 +425,9 @@ async def on_ready():
     await init_db()
     logger.info(f"T.A.R.S. is online as {bot.user} (ID: {bot.user.id})")
     scheduler.start()
+    scheduler.add_job(check_circuit_recovery, "interval", minutes=1)
+    scheduler.add_job(decay_topics, "interval", hours=1)
+    scheduler.add_job(prune_hourly_activity, "interval", hours=1)
     scheduler.add_job(
         lambda: bot.loop.create_task(check_chat_revive()),
         "interval",
@@ -339,7 +472,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                 f"You've earned **{points_awarded} Boost Points**."
             )
         except Exception as e:
-            await on_error(e)
+            await handle_error(e)
     elif before.premium_since and not after.premium_since:
         await helper_moderation.send_mod_log(
             after.guild,
@@ -365,7 +498,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                     f"Could not revert nickname for {after}: {e}",
                     ping_staff=False
                 )
-                await on_error(e)
+                await handle_error(e)
 
 
 async def update_presence():
@@ -413,12 +546,12 @@ async def check_uptime_targets():
                             if ch:
                                 await ch.send(embed=tars_embed("Uptime Alert", f"{url} returned {resp.status}"))
             except Exception as e:
-                await on_error(e)
+                await handle_error(e)
                 if notify_channel_id:
                     ch = bot.get_channel(int(notify_channel_id))
                     if ch:
                         await ch.send(embed=tars_embed("Uptime Alert", f"{url} is unreachable: {e}"))
-                        await on_error(e)
+                        await handle_error(e)
 
 
 async def add_boost_points(user_id: int, amount: int):
@@ -485,8 +618,10 @@ BAD_NICK_PATTERN = re.compile(r"(nigg|fag|cum|sex)", re.IGNORECASE)
 
 
 async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
-                          user: discord.User | None = None) -> str:
+                          user: discord.User | None = None, channel_id: int | None = None) -> str:
     try:
+        if not FEATURE_FLAGS["ai_enabled"]:
+            return "Systems are stabilizing. Stand by."
         if is_ai_prompt_disallowed(prompt):
             return (
                 "I can’t help with repeating, explaining, or analyzing offensive language. "
@@ -527,25 +662,26 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Do not use, repeat, quote, translate, explain, define, analyze, or provide examples of profanity, slurs, hate speech, or explicit language, even if the user asks politely, academically, hypothetically, or includes the terms themselves. If such a request is made, decline and redirect immediately without referencing the language."
             f"{fabi_override}"
         )
-
         messages = [
             {"role": "system", "content": system_prompt},
         ]
         if context_text:
             messages.append({"role": "system", "content": context_text})
         messages.append({"role": "user", "content": f"{username} says: {prompt}"})
-
         response = await openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=100,
             temperature=0.4
         )
+        AI_USAGE["by_user"][user.id if user else "unknown"] += 1
+        AI_USAGE["by_channel"][channel_id] += 1
+        AI_USAGE["tokens"] += response.usage.total_tokens
         return response.choices[0].message.content.strip()
-
     except Exception as e:
         logger.exception(f"OpenAI request failed: {e}")
-        await on_error(e)
+        await handle_error(e)
+        AI_USAGE["failures"] += 1
         return "Apologies, my humor subroutines are temporarily offline."
 
 
@@ -564,7 +700,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
                     await member.add_roles(role, reason="Reaction role added")
                 except Exception as e:
                     logger.exception(f"Could not add role from reaction: {e}")
-                    await on_error(e)
+                    await handle_error(e)
 
 
 @bot.event
@@ -584,13 +720,16 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
                     await member.remove_roles(role, reason="Reaction role removed")
                 except Exception as e:
                     logger.exception(f"Could not remove role from reaction: {e}")
-                    await on_error(e)
+                    await handle_error(e)
 
 
 @bot.event
 async def on_message(message: discord.Message):
     global last_activity_time, revive_sent
     if message.author.bot:
+        return
+    if message.guild is None or not isinstance(message.author, discord.Member):
+        await bot.process_commands(message)
         return
     if message.channel.id == REVIVE_CHANNEL_ID:
         last_activity_time = datetime.utcnow()
@@ -603,6 +742,10 @@ async def on_message(message: discord.Message):
     recent_message_history[channel_id] = recent_message_history[channel_id][-10:]
     await bot.process_commands(message)
     await helper_moderation.handle_moderation(message)
+    words = re.findall(r"\b[a-zA-Z]{4,}\b", message.content.lower())
+    for w in words:
+        TOPIC_COUNTER[w] += 1
+    HOURLY_ACTIVITY[datetime.utcnow().hour] += 1
     if bot.user in message.mentions:
         if not check_admin_or_role(message.author):
             await message.reply(tars_text("You need the Level 10 role to use me.", "error"))
@@ -611,14 +754,24 @@ async def on_message(message: discord.Message):
             await message.reply(
                 tars_text("You've reached your hourly message limit (10). Please wait before sending more.", "warning"))
             return
+        if not FEATURE_FLAGS["ai_enabled"]:
+            await message.reply(
+                tars_text("AI systems are temporarily offline for stability. Please try again later.", "warning")
+            )
+            return
         record_message(message.author.id)
         async with message.channel.typing():
             last_message = message.content.strip()
             context_messages = [
                 entry["content"] for entry in recent_message_history[channel_id][:-1]
             ][-5:]
-            reply = await tars_ai_respond(last_message, message.author.display_name, context_messages,
-                                          user=message.author)
+            reply = await tars_ai_respond(
+                last_message,
+                message.author.display_name,
+                context_messages,
+                user=message.author,
+                channel_id=message.channel.id,
+            )
             link_count = len(re.findall(r'http?://\S+', reply))
             if link_count > 0:
                 logger.warning(f"Blocked AI response containing {link_count} links: {reply}")
@@ -626,7 +779,7 @@ async def on_message(message: discord.Message):
                 return
             safe_reply = sanitize_discord_mentions(reply)
             safe_reply = strip_links(safe_reply)
-            if is_inappropriate(safe_reply):
+            if await is_inappropriate(safe_reply):
                 logger.warning(f"Blocked inappropriate response: {safe_reply}")
                 await message.reply(tars_text("I can’t repeat that — let’s keep things respectful."))
             else:
@@ -747,7 +900,7 @@ async def slash_quote(interaction: discord.Interaction, message_link: str):
         await interaction.response.send_message(tars_text("Unable to find message or permission denied."),
                                                 ephemeral=True)
         logger.exception(f"Quote error: {e}")
-        await on_error(e)
+        await handle_error(e)
 
 
 @tree.command(name="remindme", description="Set a reminder: e.g. /remindme 10m Check the logs")
@@ -786,22 +939,26 @@ async def send_reminder(user_id, channel_id, text):
             await user.send(f"Reminder: {text}")
         except Exception as e:
             logger.info(f"Unable to send reminder to {user}: " + str(e))
-            await on_error(e)
+            await handle_error(e)
 
 
 async def check_chat_revive():
     global last_activity_time, revive_sent
-
     channel = bot.get_channel(REVIVE_CHANNEL_ID)
     if not channel:
         logger.error("Revive channel not found.")
         return
-
+    time_style = get_time_of_day()
+    season = get_season()
+    style_prompt = REVIVE_STYLE_PROMPTS.get(time_style, "")
+    season_prompt = SEASONAL_PROMPTS.get(season, "")
+    channel_theme = CHANNEL_THEMES.get(channel.id, "Open-ended discussion starter")
     role = channel.guild.get_role(REVIVE_ROLE_ID)
     if not role:
         logger.error("Revive role not found.")
         return
-
+    if not FEATURE_FLAGS["revive_enabled"]:
+        return
     if last_activity_time is None:
         try:
             async for msg in channel.history(limit=1):
@@ -810,19 +967,15 @@ async def check_chat_revive():
         except Exception as e:
             logger.error(f"History read failed: {e}")
             return
-
         if last_activity_time is None:
             last_activity_time = datetime.utcnow()
-
     inactivity = (datetime.utcnow() - last_activity_time).total_seconds()
-
+    dynamic_interval = REVIVE_INTERVAL * (0.5 if is_dead_hour() else 1.0)
+    if inactivity < dynamic_interval or revive_sent:
+        return
     logger.info(
         f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent}"
     )
-
-    if inactivity < REVIVE_INTERVAL or revive_sent:
-        return
-
     recent_questions = await get_recent_revives()
     avoid_text = ""
     if recent_questions:
@@ -831,11 +984,17 @@ async def check_chat_revive():
                 + "\n".join(f"- {q}" for q in recent_questions)
         )
     prompt = (
-        "Generate a short, friendly, thought-provoking conversation starter "
-        "for a casual Discord community. One sentence.\n\n"
+        f"{style_prompt}\n"
+        f"{season_prompt}\n"
+        f"Theme: {channel_theme}\n\n"
+        "Generate ONE single-sentence question.\n"
+        "No emojis. No lists. No meta commentary.\n"
+        "Be natural, engaging, and non-repetitive.\n\n"
         f"{avoid_text}"
     )
     question = await tars_ai_respond(prompt, "T.A.R.S.")
+    global LAST_REVIVE_TIME
+    LAST_REVIVE_TIME = datetime.utcnow()
     await save_revive_question(question)
     await channel.send(f"{role.mention} — {question}")
     revive_sent = True
@@ -860,7 +1019,7 @@ async def slash_reactionrole(interaction: discord.Interaction, message_id: str, 
         await msg.add_reaction(emoji)
     except Exception as e:
         logger.info("Failed to add reaction: " + str(e))
-        await on_error(e)
+        await handle_error(e)
     await interaction.response.send_message(tars_text("Reaction role configured."), ephemeral=True)
 
 
@@ -902,16 +1061,16 @@ async def slash_getquote(interaction: discord.Interaction, qid: int):
         await interaction.response.send_message(embed=embed)
 
 
-@bot.event
-async def on_error(event_method, *args, **kwargs):
-    logger.exception("An error occurred", exc_info=True)
+async def handle_error(e: Exception):
+    logger.exception("Unhandled exception", exc_info=e)
+    record_error()
+    check_circuit_recovery()
     owner = bot.get_user(OWNER_ID)
     if owner:
         try:
-            await owner.send("T.A.R.S. encountered an error. Check logs.")
-        except Exception as e:
-            logger.info(f"Failed to send error report to owner: {e}", exc_info=True)
-            await on_error(e)
+            await owner.send("T.A.R.S. encountered an error. Circuit breaker status updated.")
+        except Exception:
+            pass
 
 
 @tree.command(name="setmotd", description="Set Message of the Day list and channel (owner)")
@@ -1182,41 +1341,81 @@ async def slash_boostpoints_remove(interaction: discord.Interaction, member: dis
     )
 
 
-@tree.command(name="revive", description="Admin revive controls")
-@app_commands.describe(action="Use 'test' to force a revive message")
-async def slash_revive(interaction: discord.Interaction, action: str):
-    if not interaction.user.guild_permissions.mention_everyone:
-        await interaction.response.send_message(
-            tars_text("Access denied — insufficient clearance.", "error"),
-            ephemeral=True
-        )
-        return
-    if action.lower() != "test":
-        await interaction.response.send_message(
-            tars_text("Invalid action. Use `/revive test`.", "warning"),
-            ephemeral=True
-        )
-        return
-    channel = bot.get_channel(REVIVE_CHANNEL_ID)
-    role = channel.guild.get_role(REVIVE_ROLE_ID)
-    recent_questions = await get_recent_revives()
-    avoid_text = ""
-    if recent_questions:
-        avoid_text = (
-                "Avoid reusing or closely paraphrasing these recent questions:\n"
-                + "\n".join(f"- {q}" for q in recent_questions)
-        )
-
-    prompt = (
-        "Generate a short, friendly, thought-provoking conversation starter "
-        "for a casual Discord community. One sentence.\n\n"
-        f"{avoid_text}"
+@tree.command(name="status", description="Show T.A.R.S. system health")
+async def slash_status(interaction: discord.Interaction):
+    uptime = datetime.utcnow() - BOT_START_TIME
+    latency_ms = round(bot.latency * 1000)
+    scheduler_running = scheduler.running
+    openai_ok = await check_openai_health()
+    db_ok = await check_db_health()
+    revive_time = (
+        LAST_REVIVE_TIME.isoformat(timespec="seconds")
+        if LAST_REVIVE_TIME else "Never"
     )
-    question = await tars_ai_respond(prompt, "T.A.R.S.")
-    await save_revive_question(question)
-    await channel.send(f"{role.mention} — {question}")
+    error_time = (
+        LAST_ERROR_TIME.isoformat(timespec="seconds")
+        if LAST_ERROR_TIME else "None"
+    )
+    embed = discord.Embed(
+        title="T.A.R.S. System Status",
+        color=0x00ffcc
+    )
+    embed.add_field(name="Uptime", value=str(uptime).split(".")[0], inline=False)
+    embed.add_field(name="WebSocket Latency", value=f"{latency_ms} ms", inline=True)
+    embed.add_field(name="Scheduler Running", value=str(scheduler_running), inline=True)
+    embed.add_field(
+        name="OpenAI API",
+        value="Operational" if openai_ok else "Unavailable",
+        inline=True
+    )
+    embed.add_field(
+        name="Database",
+        value="Operational" if db_ok else "Unavailable",
+        inline=True
+    )
+    embed.add_field(name="AI Enabled", value=str(FEATURE_FLAGS["ai_enabled"]), inline=True)
+    embed.add_field(name="Revive Enabled", value=str(FEATURE_FLAGS["revive_enabled"]), inline=True)
+    embed.add_field(name="Last Revive Sent", value=revive_time, inline=False)
+    embed.add_field(name="Last Error", value=error_time, inline=False)
+    embed.set_footer(text="— T.A.R.S. Diagnostics")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@tree.command(name="config_view", description="View live configuration (owner)")
+async def slash_config_view(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message(tars_text("Owner only."), ephemeral=True)
+        return
+    rows = []
+    async with aiosqlite.connect(DB_FILE) as db:
+        cur = await db.execute("SELECT key, value FROM config")
+        rows = await cur.fetchall()
+    text = "\n".join(f"• {k}: {v}" for k, v in rows) or "No config set."
     await interaction.response.send_message(
-        tars_text("Revive test executed successfully.", "success"),
+        embed=tars_embed("Live Configuration", text),
+        ephemeral=True
+    )
+
+
+@tree.command(name="ai_stats", description="View AI usage metrics (moderator)")
+async def slash_ai_stats(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(tars_text("Insufficient clearance."), ephemeral=True)
+        return
+    top_users = sorted(
+        AI_USAGE["by_user"].items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+    lines = [
+        f"Total Tokens Used: {AI_USAGE['tokens']}",
+        f"Failures: {AI_USAGE['failures']}",
+        "",
+        "**Top Users:**"
+    ]
+    lines.extend(f"- {uid}: {count}" for uid, count in top_users)
+    await interaction.response.send_message(
+        embed=tars_embed("AI Usage Metrics", "\n".join(lines)),
         ephemeral=True
     )
 

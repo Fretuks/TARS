@@ -31,6 +31,10 @@ AI_PROHIBITED_PATTERNS = [
     r"\bblyat\b", r"\bsuka\b", r"\bnaxuy\b",
     r"\bблять\b", r"\bсука\b", r"\bнахуй\b", r"\bхуй\b",
 ]
+CHANNEL_THEMES = {
+    1424038714266357886: "Gaming, General Chat, and Fun",
+}
+
 
 def is_ai_prompt_disallowed(text: str) -> bool:
     lowered = text.lower()
