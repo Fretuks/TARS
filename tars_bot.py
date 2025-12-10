@@ -335,7 +335,9 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         )
         try:
             await after.send(
-                f"Thanks for boosting {after.guild.name}! You've earned **{points_awarded} Boost Points**.")
+                f"Thanks for boosting {after.guild.name}! "
+                f"You've earned **{points_awarded} Boost Points**."
+            )
         except Exception as e:
             await on_error(e)
     elif before.premium_since and not after.premium_since:
@@ -344,6 +346,26 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             f"{after.mention} stopped boosting the server.",
             ping_staff=False
         )
+    if before.display_name != after.display_name:
+        if BAD_NICK_PATTERN.search(after.display_name):
+            try:
+                await after.edit(
+                    nick=None,
+                    reason="Inappropriate nickname filtered by T.A.R.S."
+                )
+                await helper_moderation.send_mod_log(
+                    after.guild,
+                    f"Reverted nickname for {after} due to inappropriate content: "
+                    f"{after.display_name}",
+                    ping_staff=True
+                )
+            except Exception as e:
+                await helper_moderation.send_mod_log(
+                    after.guild,
+                    f"Could not revert nickname for {after}: {e}",
+                    ping_staff=False
+                )
+                await on_error(e)
 
 
 async def update_presence():
@@ -460,27 +482,6 @@ async def on_member_remove(member: discord.Member):
 
 
 BAD_NICK_PATTERN = re.compile(r"(nigg|fag|cum|sex)", re.IGNORECASE)
-
-
-@bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
-    if before.display_name != after.display_name:
-        if BAD_NICK_PATTERN.search(after.display_name):
-            try:
-                await after.edit(nick=None, reason="Inappropriate nickname filtered by T.A.R.S.")
-                await helper_moderation.send_mod_log(
-                    after.guild,
-                    f"Reverted nickname for {after} due to inappropriate content: {after.display_name}",
-                    ping_staff=True
-                )
-            except Exception as e:
-                await on_error(e)
-                await helper_moderation.send_mod_log(
-                    after.guild,
-                    f"Could not revert nickname for {after}: {e}",
-                    ping_staff=False
-                )
-                await on_error(e)
 
 
 async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
