@@ -790,42 +790,55 @@ async def send_reminder(user_id, channel_id, text):
 
 async def check_chat_revive():
     global last_activity_time, revive_sent
+
     channel = bot.get_channel(REVIVE_CHANNEL_ID)
     if not channel:
         logger.error("Revive channel not found.")
         return
+
     role = channel.guild.get_role(REVIVE_ROLE_ID)
     if not role:
         logger.error("Revive role not found.")
         return
-    if not last_activity_time:
-        async for msg in channel.history(limit=1):
-            last_activity_time = msg.created_at.replace(tzinfo=None)
+
+    if last_activity_time is None:
+        try:
+            async for msg in channel.history(limit=1):
+                last_activity_time = msg.created_at.replace(tzinfo=None)
+                break
+        except Exception as e:
+            logger.error(f"History read failed: {e}")
             return
+
+        if last_activity_time is None:
+            last_activity_time = datetime.utcnow()
+
     inactivity = (datetime.utcnow() - last_activity_time).total_seconds()
+
+    logger.info(
+        f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent}"
+    )
+
     if inactivity < REVIVE_INTERVAL or revive_sent:
         return
+
     recent_questions = await get_recent_revives()
     avoid_text = ""
     if recent_questions:
         avoid_text = (
-                "Avoid reusing or closely paraphrasing these recent questions:\n"
-                + "\n".join(f"- {q}" for q in recent_questions)
+            "Avoid reusing or closely paraphrasing these recent questions:\n"
+            + "\n".join(f"- {q}" for q in recent_questions)
         )
-
     prompt = (
         "Generate a short, friendly, thought-provoking conversation starter "
         "for a casual Discord community. One sentence.\n\n"
         f"{avoid_text}"
     )
-
     question = await tars_ai_respond(prompt, "T.A.R.S.")
-
     await save_revive_question(question)
     await channel.send(f"{role.mention} — {question}")
-
     revive_sent = True
-    logger.info("Scheduled chat revive sent.")
+    logger.info("Chat revive sent successfully.")
 
 
 @tree.command(name="reactionrole", description="Create a reaction role (admin only)")
@@ -1171,7 +1184,7 @@ async def slash_boostpoints_remove(interaction: discord.Interaction, member: dis
 @tree.command(name="revive", description="Admin revive controls")
 @app_commands.describe(action="Use 'test' to force a revive message")
 async def slash_revive(interaction: discord.Interaction, action: str):
-    if not interaction.user.guild_permissions.manage_guild:
+    if not interaction.user.guild_permissions.mention_everyone:
         await interaction.response.send_message(
             tars_text("Access denied — insufficient clearance.", "error"),
             ephemeral=True
