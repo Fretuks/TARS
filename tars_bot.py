@@ -790,32 +790,37 @@ async def on_message(message: discord.Message):
 
 @tree.command(name="tars", description="Activate T.A.R.S. and show available commands")
 async def slash_tars(interaction: discord.Interaction):
-    version = BOT_VERSION  # pull current version
+    version = BOT_VERSION
 
     intro = tars_text(
-        f"T.A.R.S. online. Systems nominal.\n**Current Version:** `{version}`\n"
-        "You can address me directly or use the following commands.",
+        f"T.A.R.S. online. Systems nominal.\n"
+        f"**Current Version:** `{version}`\n\n"
+        "Address me directly or use the commands below.",
         "info"
     )
 
     mod_embed = tars_embed(
-        "Moderation Systems Online",
+        "Moderation Systems",
         "/tarsreport — report a user\n"
         "/clean — delete the last N messages\n"
         "/lock — lock the current channel\n"
         "/unlock — unlock the current channel\n"
-        "/addbannedword — add banned word to auto-delete list\n"
-        "/listbannedwords — view banned words list\n"
+        "/slowmode — set slowmode for a channel\n"
+        "/addbannedword — add a banned word\n"
+        "/removebannedword — remove a banned word\n"
+        "/listbannedwords — view banned words\n"
     )
 
     util_embed = tars_embed(
-        "Utility Subroutines",
+        "Utility & Diagnostics",
         "/userinfo — get user info\n"
+        "/roleinfo — role details\n"
         "/serverinfo — server info\n"
+        "/status — system health & diagnostics\n"
+        "/config_view — view live configuration (owner)\n"
+        "/ai_stats — AI usage metrics (moderator)\n"
         "/remindme — set a reminder\n"
         "/reactionrole — create reaction roles\n"
-        "/slowmode — set slowmode for a channel\n"
-        "/getquote — retrieve a saved quote\n"
         "/setmotd — configure the message of the day\n"
     )
 
@@ -824,7 +829,8 @@ async def slash_tars(interaction: discord.Interaction):
         "/8ball — Magic 8-ball\n"
         "/dice — roll dice\n"
         "/quote — save message quotes\n"
-        "/ping — check T.A.R.S. responsiveness"
+        "/getquote — retrieve saved quotes\n"
+        "/ping — check responsiveness\n"
     )
 
     await interaction.response.send_message(
@@ -1150,6 +1156,40 @@ async def slash_list_banned(interaction: discord.Interaction):
                                             ephemeral=True)
 
 
+@tree.command(
+    name="removebannedword",
+    description="Remove a word from the auto-delete list (admin only)"
+)
+@app_commands.describe(word="Word to unban")
+async def slash_remove_banned(interaction: discord.Interaction, word: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message(
+            tars_text("You lack permission to modify banned words.", "error"),
+            ephemeral=True
+        )
+        return
+
+    word = word.lower().strip()
+    banned = await get_config("banned_words", [])
+    if word not in banned:
+        await interaction.response.send_message(
+            tars_text(f"'{word}' is not currently in the banned words list.", "warning"),
+            ephemeral=True
+        )
+        return
+    banned.remove(word)
+    await set_config("banned_words", banned)
+    await interaction.response.send_message(
+        tars_text(f"Removed '{word}' from banned words.", "success"),
+        ephemeral=True
+    )
+    await helper_moderation.send_mod_log(
+        interaction.guild,
+        f"Admin {interaction.user.mention} removed banned word: **{word}**",
+        ping_staff=False
+    )
+
+
 @tree.command(name="ping", description="Check T.A.R.S. responsiveness")
 async def slash_ping(interaction: discord.Interaction):
     latency = round(bot.latency * 1000)
@@ -1401,7 +1441,7 @@ async def slash_config_view(interaction: discord.Interaction):
 
 @tree.command(name="ai_stats", description="View AI usage metrics (moderator)")
 async def slash_ai_stats(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_guild:
+    if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message(tars_text("Insufficient clearance."), ephemeral=True)
         return
     top_users = sorted(

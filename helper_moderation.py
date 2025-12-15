@@ -23,6 +23,9 @@ def is_user_immune(member: discord.Member) -> bool:
 
 
 async def handle_moderation(message):
+    current_warnings = await get_warnings(str(message.author.id))
+    if current_warnings >= WARN_THRESHOLD:
+        return
     if message.author.bot:
         return
     if is_user_immune(message.author):
@@ -42,7 +45,25 @@ async def handle_moderation(message):
                 await message.delete()
             except Exception as e:
                 logger.warning(f"Failed to delete banned word message: {e}")
-
+            if count >= WARN_THRESHOLD:
+                try:
+                    await message.author.timeout(
+                        discord.utils.utcnow() + timedelta(minutes=10),
+                        reason="T.A.R.S. automated enforcement (banned word)"
+                    )
+                    await send_mod_log(
+                        g,
+                        f"{message.author} was timed out for 10 minutes (banned word threshold).",
+                        ping_staff=True
+                    )
+                    await set_warnings(uid, 0)
+                except Exception as e:
+                    await send_mod_log(
+                        g,
+                        f"Failed to timeout {message.author}: {e}",
+                        ping_staff=False
+                    )
+                return
             await message.channel.send(
                 tars_text(f"{message.author.mention}, watch your language. [Warning {count}/3]")
             )
@@ -53,7 +74,7 @@ async def handle_moderation(message):
             await send_mod_log(
                 g,
                 f"Banned word '{word}' used by {message.author} in {message.channel.mention}. Warnings {count}.",
-                ping_staff=(count >= WARN_THRESHOLD)
+                ping_staff=False
             )
             return
     if len(text.splitlines()) > 10 or len(text) > 500:
@@ -175,7 +196,6 @@ async def handle_moderation(message):
             ping_staff=(count >= WARN_THRESHOLD)
         )
         return
-    current_warnings = await get_warnings(uid)
     if current_warnings >= WARN_THRESHOLD:
         try:
             await message.author.timeout(
@@ -199,7 +219,7 @@ async def handle_moderation(message):
 
 async def increment_warning(user_id: str) -> int:
     count = await get_warnings(user_id)
-    count += 1
+    count = min(count + 1, WARN_THRESHOLD)
     await set_warnings(user_id, count)
     return count
 
@@ -256,7 +276,9 @@ async def helper_warn(message, reaction, uid):
     except Exception as e:
         logger.exception(f"Could not delete message: {e}")
     count = await get_warnings(uid)
-    count += 1
+    if count >= WARN_THRESHOLD:
+        return WARN_THRESHOLD
+    count = min(count + 1, WARN_THRESHOLD)
     await set_warnings(uid, count)
     return count
 
