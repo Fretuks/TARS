@@ -1194,7 +1194,7 @@ async def slash_list_banned(interaction: discord.Interaction):
 )
 @app_commands.describe(word="Word to unban")
 async def slash_remove_banned(interaction: discord.Interaction, word: str):
-    if not interaction.user.guild_permissions.manage_messages:
+    if not interaction.user.guild_permissions.ban_members:
         await interaction.response.send_message(
             tars_text("You lack permission to modify banned words.", "error"),
             ephemeral=True
