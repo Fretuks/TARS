@@ -49,6 +49,19 @@ ERROR_LOG: list[datetime] = []
 COOLDOWN_UNTIL: datetime | None = None
 TOPIC_COUNTER = defaultdict(int)
 HOURLY_ACTIVITY = defaultdict(int)
+TARS_COMMAND_CATEGORIES = {
+    "Moderation": {
+        "tarsreport", "clean", "lock", "unlock", "slowmode",
+        "addbannedword", "removebannedword", "listbannedwords"
+    },
+    "Utility & Diagnostics": {
+        "userinfo", "roleinfo", "serverinfo", "status",
+        "config_view", "ai_stats", "remindme", "reactionrole", "setmotd"
+    },
+    "Recreational Protocols": {
+        "8ball", "dice", "quote", "getquote", "ping"
+    }
+}
 
 
 async def check_openai_health() -> bool:
@@ -99,6 +112,38 @@ def is_dead_hour() -> bool:
     avg = sum(HOURLY_ACTIVITY.values()) / max(len(HOURLY_ACTIVITY), 1)
     current = HOURLY_ACTIVITY.get(datetime.utcnow().hour, 0)
     return current < (avg * 0.5)
+
+
+async def tars_command_help(interaction: discord.Interaction, command_name: str):
+    cmd = next((c for c in tree.get_commands() if c.name == command_name), None)
+    if not cmd:
+        await interaction.response.send_message(
+            tars_text(f"Unknown command: `{command_name}`", "error"),
+            ephemeral=True
+        )
+        return
+    if isinstance(cmd, app_commands.Command):
+        perms = cmd.checks
+        if perms and not interaction.user.guild_permissions.manage_messages:
+            pass
+    usage = f"/{cmd.name}"
+    if cmd.parameters:
+        for p in cmd.parameters:
+            usage += f" <{p.name}>"
+    embed = discord.Embed(
+        title=f"/{cmd.name}",
+        description=cmd.description or "No description provided.",
+        color=0x00ffcc
+    )
+    embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
+    if cmd.parameters:
+        params = "\n".join(
+            f"• **{p.name}** — {p.description or 'No description'}"
+            for p in cmd.parameters
+        )
+        embed.add_field(name="Parameters", value=params, inline=False)
+    embed.set_footer(text="— T.A.R.S. Command Reference")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 CONFIG_SCHEMA = {
@@ -788,54 +833,41 @@ async def on_message(message: discord.Message):
                 await message.reply(tars_text(safe_reply))
 
 
-@tree.command(name="tars", description="Activate T.A.R.S. and show available commands")
-async def slash_tars(interaction: discord.Interaction):
+@tree.command(name="tars", description="T.A.R.S. command console and help")
+@app_commands.describe(command="Optional command name for detailed help")
+async def slash_tars(interaction: discord.Interaction, command: str | None = None):
     version = BOT_VERSION
-
+    ai_status = "ONLINE" if FEATURE_FLAGS["ai_enabled"] else "OFFLINE"
+    revive_status = "ONLINE" if FEATURE_FLAGS["revive_enabled"] else "OFFLINE"
+    if command:
+        await tars_command_help(interaction, command)
+        return
     intro = tars_text(
         f"T.A.R.S. online. Systems nominal.\n"
-        f"**Current Version:** `{version}`\n\n"
-        "Address me directly or use the commands below.",
+        f"**Version:** `{version}`\n\n"
+        f"**Subsystem Status**\n"
+        f"• AI: `{ai_status}`\n"
+        f"• Chat Revive: `{revive_status}`\n\n"
+        "Use `/tars help <command>` for detailed command info.",
         "info"
     )
+    embeds: list[discord.Embed] = []
+    all_commands = {cmd.name: cmd for cmd in tree.get_commands()}
+    for category, names in TARS_COMMAND_CATEGORIES.items():
+        lines = []
+        for name in sorted(names):
+            cmd = all_commands.get(name)
+            if not cmd:
+                continue
+            lines.append(f"/{cmd.name} — {cmd.description}")
 
-    mod_embed = tars_embed(
-        "Moderation Systems",
-        "/tarsreport — report a user\n"
-        "/clean — delete the last N messages\n"
-        "/lock — lock the current channel\n"
-        "/unlock — unlock the current channel\n"
-        "/slowmode — set slowmode for a channel\n"
-        "/addbannedword — add a banned word\n"
-        "/removebannedword — remove a banned word\n"
-        "/listbannedwords — view banned words\n"
-    )
-
-    util_embed = tars_embed(
-        "Utility & Diagnostics",
-        "/userinfo — get user info\n"
-        "/roleinfo — role details\n"
-        "/serverinfo — server info\n"
-        "/status — system health & diagnostics\n"
-        "/config_view — view live configuration (owner)\n"
-        "/ai_stats — AI usage metrics (moderator)\n"
-        "/remindme — set a reminder\n"
-        "/reactionrole — create reaction roles\n"
-        "/setmotd — configure the message of the day\n"
-    )
-
-    fun_embed = tars_embed(
-        "Recreational Protocols",
-        "/8ball — Magic 8-ball\n"
-        "/dice — roll dice\n"
-        "/quote — save message quotes\n"
-        "/getquote — retrieve saved quotes\n"
-        "/ping — check responsiveness\n"
-    )
-
+        if lines:
+            embeds.append(
+                tars_embed(category, "\n".join(lines))
+            )
     await interaction.response.send_message(
         intro,
-        embeds=[mod_embed, util_embed, fun_embed],
+        embeds=embeds,
         ephemeral=False
     )
 
