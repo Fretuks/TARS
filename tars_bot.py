@@ -1045,7 +1045,7 @@ async def check_chat_revive():
 @app_commands.describe(message_id="ID of message to attach", emoji="Emoji", role="Role to give")
 async def slash_reactionrole(interaction: discord.Interaction, message_id: str, emoji: str, role: discord.Role):
     if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message(tars_text("Access denied — insufficient clearance.", "error"),
+        await interaction.response.send_message(tars_text("Access denied: insufficient clearance.", "error"),
                                                 ephemeral=True)
         return
     async with aiosqlite.connect(DB_FILE) as db:
@@ -1129,7 +1129,7 @@ async def slash_setmotd(interaction: discord.Interaction, channel: discord.TextC
 async def slash_clean(interaction: discord.Interaction, amount: int):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message(
-            tars_text("Access denied — insufficient clearance.", "error"), ephemeral=True
+            tars_text("Access denied: insufficient clearance.", "error"), ephemeral=True
         )
         return
     await interaction.response.defer(ephemeral=True)
@@ -1272,7 +1272,7 @@ async def slash_boostshop(interaction: discord.Interaction):
         current_points = await get_boost_points(interaction.user.id)
         if current_points < cost:
             await interaction_select.response.send_message(
-                tars_text(f"Insufficient points — you need {cost}, but you only have {current_points}.", "error"),
+                tars_text(f"Insufficient points: you need {cost}, but you only have {current_points}.", "error"),
                 ephemeral=True
             )
             return
@@ -1360,7 +1360,7 @@ async def slash_close(interaction: discord.Interaction):
 async def slash_boostpoints_add(interaction: discord.Interaction, member: discord.Member, amount: int):
     if not interaction.user.guild_permissions.manage_guild:
         await interaction.response.send_message(
-            tars_text("Access denied — insufficient clearance.", "error"), ephemeral=True
+            tars_text("Access denied: insufficient clearance.", "error"), ephemeral=True
         )
         return
     if amount <= 0:
@@ -1387,7 +1387,7 @@ async def slash_boostpoints_add(interaction: discord.Interaction, member: discor
 async def slash_boostpoints_remove(interaction: discord.Interaction, member: discord.Member, amount: int):
     if not interaction.user.guild_permissions.manage_guild:
         await interaction.response.send_message(
-            tars_text("Access denied — insufficient clearance.", "error"), ephemeral=True
+            tars_text("Access denied: insufficient clearance.", "error"), ephemeral=True
         )
         return
     if amount <= 0:
@@ -1473,7 +1473,7 @@ async def slash_config_view(interaction: discord.Interaction):
 
 @tree.command(name="ai_stats", description="View AI usage metrics (moderator)")
 async def slash_ai_stats(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_messages:
+    if not interaction.user.guild_permissions.ban_members:
         await interaction.response.send_message(tars_text("Insufficient clearance."), ephemeral=True)
         return
     top_users = sorted(
