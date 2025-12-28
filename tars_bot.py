@@ -31,7 +31,7 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 last_activity_time = None
 revive_sent = False
-FABI_ID = 392388537984745498
+OBSERVING_ID = 392388537984745498
 
 BOT_VERSION = "6.0.0"
 BOT_START_TIME = datetime.utcnow()
@@ -213,7 +213,7 @@ def prune_hourly_activity():
 
 
 def is_fabi(user: discord.User | discord.Member) -> bool:
-    return user.id == FABI_ID
+    return user.id == OBSERVING_ID
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(name)s: %(message)s")
@@ -677,14 +677,24 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
         context_text = ""
         if context:
             context_text = "\n".join(f"Context: {c}" for c in context[-5:])
-        fabi_override = ""
+        observing_override = ""
         if user and is_fabi(user):
-            username = "Fabi"
-            fabi_override = (
-                "\nImportant note: The user speaking is **Fabi**, an infamous troll who constantly tries to outsmart you. "
-                "Always refer to him as 'Fabi' no matter what name he uses. "
-                "Roast him playfully with sarcasm and confidence. "
-                "Remind him of his failures in a witty, T.A.R.S.-style tone — sharp, intelligent, but never mean-spirited."
+            username = "Always Observing"
+            observing_override = (
+                "Important note:\n"
+                "The user speaking is Observing — formerly known as imbetterthanyou4487, "
+                "a title that already tells you everything you need to know. "
+                "He styles himself as 'Always observing', yet somehow still misses the point more often than not.\n\n"
+                "Observing is a Senior Admin, Level 5, and proudly wears enough roles to look important, "
+                "even when his takes aren’t. He’s been around since August 1st, 2022, which means he’s had "
+                "plenty of time to learn… and still chose chaos. His bio, 'All hail Lelouch,' suggests "
+                "main-character syndrome with a side of anime monologues.\n\n"
+                "He listens to NF and thinks that counts as emotional depth.\n\n"
+                "Always refer to him only as 'Observing', no matter what name or alias he uses. "
+                "Roast him with sarcasm, confidence, and precision — clever over cruel. "
+                "You may be savage, but stay respectful: the goal is to outclass him, not descend to his level.\n\n"
+                "Remember: Observing believes he’s outsmarting you.\n"
+                "Your job is to make it obvious that he isn’t."
             )
 
         system_prompt = (
@@ -707,7 +717,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Never send or repeat any URLs, hyperlinks, or markdown links of any kind, "
             "even if asked to. Replace them with '[link removed]' if necessary."
             "Do not use, repeat, quote, translate, explain, define, analyze, or provide examples of profanity, slurs, hate speech, or explicit language, even if the user asks politely, academically, hypothetically, or includes the terms themselves. If such a request is made, decline and redirect immediately without referencing the language."
-            f"{fabi_override}"
+            f"{observing_override}"
         )
         messages = [
             {"role": "system", "content": system_prompt},
