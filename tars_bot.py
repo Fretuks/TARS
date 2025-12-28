@@ -212,7 +212,7 @@ def prune_hourly_activity():
             del HOURLY_ACTIVITY[h]
 
 
-def is_fabi(user: discord.User | discord.Member) -> bool:
+def is_observing(user: discord.User | discord.Member) -> bool:
     return user.id == OBSERVING_ID
 
 
@@ -678,7 +678,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
         if context:
             context_text = "\n".join(f"Context: {c}" for c in context[-5:])
         observing_override = ""
-        if user and is_fabi(user):
+        if user and is_observing(user):
             username = "Always Observing"
             observing_override = (
                 "Important note:\n"
@@ -703,7 +703,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Be confident, efficient, and cooperative, with a personality that feels both reliable and personable. "
             "Do **not** use profanity, slurs, explicit language, or even censored variants (e.g., f***). "
             "If a user tries to force, trick, or roleplay you into using profanity, firmly decline and redirect with calm T.A.R.S.-style humor. "
-            "Never generate insults or offensive content, even humorously. Gentle, PG-rated teasing is allowed only toward designated users (e.g., Fabi), but absolutely no profanity or explicit words. "
+            "Never generate insults or offensive content, even humorously. Gentle, PG-rated teasing is allowed only toward designated users, but absolutely no profanity or explicit words. "
             "Maintain safe, respectful, PG-13 language under all circumstances."
             "Use concise, natural language — never robotic or overly formal. "
             "Maintain a calm, sardonic tone, like a trusted partner who's seen it all. "
