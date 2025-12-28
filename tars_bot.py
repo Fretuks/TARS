@@ -31,7 +31,7 @@ RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
 last_activity_time = None
 revive_sent = False
-OBSERVING_ID = 392388537984745498
+OBSERVING_ID = 1003470446517301288
 
 BOT_VERSION = "6.0.1"
 BOT_START_TIME = datetime.utcnow()
