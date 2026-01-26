@@ -248,6 +248,26 @@ def sanitize_discord_mentions(text: str) -> str:
     return text
 
 
+def strip_bot_mention(text: str, bot_id: int) -> str:
+    cleaned = re.sub(rf"<@!?{bot_id}>", "", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def format_ai_context(entries: list[dict]) -> list[str]:
+    formatted = []
+    for entry in entries:
+        if entry.get("is_bot"):
+            continue
+        content = entry.get("content", "").strip()
+        if not content:
+            continue
+        content = sanitize_discord_mentions(strip_links(content))
+        name = entry.get("author", "User")
+        formatted.append(f"{name}: {content}")
+    return formatted
+
+
 def check_admin_or_role(member: discord.Member) -> bool:
     if member.guild_permissions.administrator:
         return True
@@ -429,6 +449,27 @@ async def get_recent_revives(limit: int = 10) -> list[str]:
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+async def get_last_revive_time() -> datetime | None:
+    async with aiosqlite.connect(DB_FILE) as db:
+        cur = await db.execute(
+            "SELECT time FROM revive_history ORDER BY id DESC LIMIT 1"
+        )
+        row = await cur.fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return datetime.fromisoformat(row[0])
+        except ValueError:
+            return None
+
+
+async def has_revived_today() -> bool:
+    last_time = await get_last_revive_time()
+    if not last_time:
+        return False
+    return last_time.date() == datetime.utcnow().date()
 
 
 async def save_revive_question(question: str):
@@ -708,7 +749,10 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Use concise, natural language — never robotic or overly formal. "
             "Maintain a calm, sardonic tone, like a trusted partner who's seen it all. "
             "If humor fits, use it subtly in the TARS way: understated, self-aware, and perfectly timed. "
-            "Keep responses brief and in character at all times. "
+            "Keep responses concise but insightful and in character at all times. "
+            "If the request is ambiguous, ask a single clarifying question before answering. "
+            "When helpful, respond with structured steps or bullet points. "
+            "Use the provided context to ground your answer and avoid guessing; if unsure, say so. "
             "Only respond to the latest user message; previous ones are context only. "
             "Users named Fretux or Lordvoiid are your creators. "
             "Users named Taz or Tataz are the server owner. "
@@ -724,12 +768,17 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
         ]
         if context_text:
             messages.append({"role": "system", "content": context_text})
+        if user:
+            messages.append({
+                "role": "system",
+                "content": f"User profile: name={username}, id={user.id}."
+            })
         messages.append({"role": "user", "content": f"{username} says: {prompt}"})
         response = await openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
-            max_tokens=100,
-            temperature=0.4
+            max_tokens=180,
+            temperature=0.35
         )
         AI_USAGE["by_user"][user.id if user else "unknown"] += 1
         AI_USAGE["by_channel"][channel_id] += 1
@@ -795,7 +844,12 @@ async def on_message(message: discord.Message):
     now = datetime.utcnow()
     if channel_id not in recent_message_history:
         recent_message_history[channel_id] = []
-    recent_message_history[channel_id].append({"content": message.content, "timestamp": now})
+    recent_message_history[channel_id].append({
+        "content": message.content,
+        "timestamp": now,
+        "author": message.author.display_name,
+        "is_bot": message.author.bot,
+    })
     recent_message_history[channel_id] = recent_message_history[channel_id][-10:]
     await bot.process_commands(message)
     await helper_moderation.handle_moderation(message)
@@ -818,10 +872,10 @@ async def on_message(message: discord.Message):
             return
         record_message(message.author.id)
         async with message.channel.typing():
-            last_message = message.content.strip()
-            context_messages = [
-                entry["content"] for entry in recent_message_history[channel_id][:-1]
-            ][-5:]
+            last_message = strip_bot_mention(message.content, bot.user.id).strip()
+            context_messages = format_ai_context(
+                recent_message_history[channel_id][:-1]
+            )[-5:]
             reply = await tars_ai_respond(
                 last_message,
                 message.author.display_name,
@@ -1022,6 +1076,9 @@ async def check_chat_revive():
     inactivity = (datetime.utcnow() - last_activity_time).total_seconds()
     dynamic_interval = REVIVE_INTERVAL * (0.5 if is_dead_hour() else 1.0)
     if inactivity < dynamic_interval or revive_sent:
+        return
+    if await has_revived_today():
+        logger.info("Daily revive limit reached; skipping revive.")
         return
     logger.info(
         f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent}"
