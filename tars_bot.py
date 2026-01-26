@@ -56,7 +56,8 @@ TARS_COMMAND_CATEGORIES = {
     },
     "Utility & Diagnostics": {
         "userinfo", "roleinfo", "serverinfo", "status",
-        "config_view", "ai_stats", "remindme", "reactionrole", "setmotd"
+        "config_view", "ai_stats", "remindme", "reactionrole", "setmotd",
+        "motd_add", "motd_remove", "motd_list"
     },
     "Recreational Protocols": {
         "8ball", "dice", "quote", "getquote", "ping"
@@ -312,6 +313,35 @@ def strip_links(text: str) -> str:
     return re.sub(r'http?://\S+', '[LINK REMOVED]', text)
 
 
+DURATION_PATTERN = re.compile(r"(\d+)\s*([smhdw])", re.IGNORECASE)
+
+
+def parse_duration(duration: str) -> tuple[int, str] | None:
+    matches = list(DURATION_PATTERN.finditer(duration))
+    if not matches:
+        return None
+    remainder = DURATION_PATTERN.sub("", duration)
+    if remainder.strip():
+        return None
+    multipliers = {
+        "s": 1,
+        "m": 60,
+        "h": 3600,
+        "d": 86400,
+        "w": 604800,
+    }
+    total = 0
+    parts = []
+    for match in matches:
+        value = int(match.group(1))
+        unit = match.group(2).lower()
+        total += value * multipliers[unit]
+        parts.append(f"{value}{unit}")
+    if total <= 0:
+        return None
+    return total, " ".join(parts)
+
+
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("""CREATE TABLE IF NOT EXISTS warnings
@@ -493,6 +523,7 @@ async def save_revive_question(question: str):
 scheduler = AsyncIOScheduler()
 MOTD_LIST = []
 motd_index = 0
+MOTD_JOB_ID = "motd_rotation"
 
 
 async def get_config(key: str, default=None):
@@ -527,8 +558,7 @@ async def on_ready():
     motd = await get_config("motd_list", [])
     global MOTD_LIST, motd_index
     MOTD_LIST = motd or []
-    if MOTD_LIST:
-        scheduler.add_job(rotate_motd, "interval", minutes=60)
+    schedule_motd_rotation()
     targets = await get_config("uptime_targets", [])
     if targets:
         scheduler.add_job(check_uptime_targets, "interval", minutes=5)
@@ -614,6 +644,14 @@ async def rotate_motd():
         ch = bot.get_channel(int(channel_id))
         if ch:
             await ch.send(embed=tars_embed("Message of the Day", f"{text}\n\n**T.A.R.S.**: Stay sharp out there."))
+
+
+def schedule_motd_rotation():
+    job = scheduler.get_job(MOTD_JOB_ID)
+    if MOTD_LIST and not job:
+        scheduler.add_job(rotate_motd, "interval", minutes=60, id=MOTD_JOB_ID, replace_existing=True)
+    elif not MOTD_LIST and job:
+        scheduler.remove_job(MOTD_JOB_ID)
 
 
 async def check_uptime_targets():
@@ -1010,14 +1048,17 @@ async def slash_quote(interaction: discord.Interaction, message_link: str):
 @tree.command(name="remindme", description="Set a reminder: e.g. /remindme 10m Check the logs")
 @app_commands.describe(delay="Delay like 10m, 2h, 1d", text="Reminder text")
 async def slash_remindme(interaction: discord.Interaction, delay: str, text: str):
-    match = re.match(r"(\d+)([smhd])", delay)
-    if not match:
+    parsed = parse_duration(delay)
+    if not parsed:
         await interaction.response.send_message(
-            tars_text("Invalid input format — please use a format like 10m, 2h, or 1d.", "error"), ephemeral=True)
+            tars_text(
+                "Invalid input format — please use 10m, 2h, 1d, or combined like 1h 30m.",
+                "error"
+            ),
+            ephemeral=True
+        )
         return
-    num, unit = int(match.group(1)), match.group(2)
-    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    seconds = num * multipliers[unit]
+    seconds, formatted = parsed
     remind_at = datetime.utcnow() + timedelta(seconds=seconds)
     if remind_at <= datetime.utcnow():
         await interaction.response.send_message(
@@ -1030,7 +1071,9 @@ async def slash_remindme(interaction: discord.Interaction, delay: str, text: str
     scheduler.add_job(send_reminder, 'date', run_date=remind_at,
                       args=[interaction.user.id, interaction.channel.id, text])
     await interaction.response.send_message(
-        tars_text(f"Reminder set. I’ll alert you precisely on schedule in about {delay}.", "success"), ephemeral=True)
+        tars_text(f"Reminder set. I’ll alert you in about {formatted}.", "success"),
+        ephemeral=True
+    )
 
 
 async def send_reminder(user_id, channel_id, text):
@@ -1140,16 +1183,29 @@ async def slash_8ball(interaction: discord.Interaction, question: str):
 @tree.command(name="dice", description="Roll a dice like 1d6 or 2d10")
 @app_commands.describe(spec="e.g. 1d6 or 2d10")
 async def slash_dice(interaction: discord.Interaction, spec: str):
-    m = re.match(r"(\d+)d(\d+)", spec)
+    m = re.match(r"^\s*(\d*)d(\d+)([+-]\d+)?\s*$", spec.lower())
     if not m:
-        await interaction.response.send_message(tars_text("Invalid format. Use NdM, e.g., 2d6."), ephemeral=True)
+        await interaction.response.send_message(
+            tars_text("Invalid format. Use NdM or NdM+K (e.g., 2d6+1).", "error"),
+            ephemeral=True
+        )
         return
-    n, sides = int(m.group(1)), int(m.group(2))
+    n = int(m.group(1) or 1)
+    sides = int(m.group(2))
+    modifier = int(m.group(3) or 0)
     if n > 20:
         await interaction.response.send_message(tars_text("Too many dice."), ephemeral=True)
         return
+    if sides < 2 or sides > 1000:
+        await interaction.response.send_message(tars_text("Die sides must be between 2 and 1000."), ephemeral=True)
+        return
     rolls = [random.randint(1, sides) for _ in range(n)]
-    await interaction.response.send_message(tars_text(f"Rolled: {rolls} — total {sum(rolls)}"))
+    subtotal = sum(rolls)
+    total = subtotal + modifier
+    mod_text = f" {modifier:+d}" if modifier else ""
+    await interaction.response.send_message(
+        tars_text(f"Rolled: {rolls} — total {subtotal}{mod_text} = {total}")
+    )
 
 
 @tree.command(name="getquote", description="Retrieve a saved quote by ID (staff)")
@@ -1188,7 +1244,66 @@ async def slash_setmotd(interaction: discord.Interaction, channel: discord.TextC
         return
     await set_config("motd_channel_id", str(channel.id) if channel else None)
     await set_config("motd_list", MOTD_LIST)
+    schedule_motd_rotation()
     await interaction.response.send_message(tars_text("MOTD configuration updated.", "success"), ephemeral=True)
+
+
+@tree.command(name="motd_add", description="Add a message to the MOTD rotation (owner)")
+@app_commands.describe(text="Message to add")
+async def slash_motd_add(interaction: discord.Interaction, text: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message(tars_text("Owner only."), ephemeral=True)
+        return
+    cleaned = text.strip()
+    if not cleaned:
+        await interaction.response.send_message(tars_text("MOTD text cannot be empty.", "error"), ephemeral=True)
+        return
+    MOTD_LIST.append(cleaned)
+    await set_config("motd_list", MOTD_LIST)
+    schedule_motd_rotation()
+    await interaction.response.send_message(
+        tars_text(f"MOTD added. Total messages: {len(MOTD_LIST)}.", "success"),
+        ephemeral=True
+    )
+
+
+@tree.command(name="motd_remove", description="Remove an MOTD message by index (owner)")
+@app_commands.describe(index="Index from /motd_list")
+async def slash_motd_remove(interaction: discord.Interaction, index: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message(tars_text("Owner only."), ephemeral=True)
+        return
+    if index < 1 or index > len(MOTD_LIST):
+        await interaction.response.send_message(
+            tars_text("Index out of range. Use /motd_list to check entries.", "error"),
+            ephemeral=True
+        )
+        return
+    removed = MOTD_LIST.pop(index - 1)
+    await set_config("motd_list", MOTD_LIST)
+    schedule_motd_rotation()
+    await interaction.response.send_message(
+        tars_text(f"Removed MOTD: {removed}", "success"),
+        ephemeral=True
+    )
+
+
+@tree.command(name="motd_list", description="List MOTD rotation messages (owner)")
+async def slash_motd_list(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message(tars_text("Owner only."), ephemeral=True)
+        return
+    if not MOTD_LIST:
+        await interaction.response.send_message(
+            tars_text("No MOTD messages configured yet.", "info"),
+            ephemeral=True
+        )
+        return
+    lines = "\n".join(f"{idx}. {text}" for idx, text in enumerate(MOTD_LIST, start=1))
+    await interaction.response.send_message(
+        embed=tars_embed("MOTD Rotation", lines),
+        ephemeral=True
+    )
 
 
 @tree.command(name="clean", description="Delete the last N messages (admin only)")
