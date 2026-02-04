@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 import discord
 from discord.ext import commands
@@ -11,10 +11,12 @@ from dotenv import load_dotenv
 import logging
 import aiohttp
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
 from discord.ui import View, Select
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import helper_moderation
+from helper_moderation import sanitize_discord_mentions
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -23,7 +25,7 @@ GUILD_ID = int(os.getenv("GUILD_ID", "0")) if os.getenv("GUILD_ID") else None
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 REVIVE_CHANNEL_ID = 1424038714266357886
 REVIVE_ROLE_ID = 1430336620447535156
-REVIVE_INTERVAL = 6 * 60 * 60
+REVIVE_INTERVAL = 24 * 60 * 60
 CHECK_INTERVAL = 600
 AI_ACCESS_ROLE_ID = 1430704668773716008
 MESSAGE_LIMIT = 10
@@ -33,8 +35,14 @@ last_activity_time = None
 revive_sent = False
 OBSERVING_ID = 1003470446517301288
 
+QUIET_HOUR_MULTIPLIER = 2.5
+QUIET_PERCENTILE = 0.25
+QUIET_FALLBACK_START = 0
+QUIET_FALLBACK_END = 7
+MIN_OBSERVED_HOURS_FOR_LEARNING = 8
+
 BOT_VERSION = "6.0.1"
-BOT_START_TIME = datetime.utcnow()
+BOT_START_TIME = datetime.now(timezone.utc)
 
 LAST_ERROR_TIME: datetime | None = None
 LAST_REVIVE_TIME: datetime | None = None
@@ -85,7 +93,7 @@ async def check_db_health() -> bool:
 
 def record_error():
     global LAST_ERROR_TIME, COOLDOWN_UNTIL
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     LAST_ERROR_TIME = now
     ERROR_LOG.append(now)
     ERROR_LOG[:] = [t for t in ERROR_LOG if now - t <= ERROR_WINDOW]
@@ -98,7 +106,7 @@ def record_error():
 
 def check_circuit_recovery():
     global COOLDOWN_UNTIL
-    if COOLDOWN_UNTIL and datetime.utcnow() >= COOLDOWN_UNTIL:
+    if COOLDOWN_UNTIL and datetime.now(timezone.utc) >= COOLDOWN_UNTIL:
         FEATURE_FLAGS["ai_enabled"] = True
         FEATURE_FLAGS["revive_enabled"] = True
         COOLDOWN_UNTIL = None
@@ -110,7 +118,7 @@ def is_dead_hour() -> bool:
     if not HOURLY_ACTIVITY:
         return False
     avg = sum(HOURLY_ACTIVITY.values()) / max(len(HOURLY_ACTIVITY), 1)
-    current = HOURLY_ACTIVITY.get(datetime.utcnow().hour, 0)
+    current = HOURLY_ACTIVITY.get(datetime.now(timezone.utc).hour, 0)
     return current < (avg * 0.5)
 
 
@@ -138,11 +146,11 @@ async def tars_command_help(interaction: discord.Interaction, command_name: str)
     embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
     if cmd.parameters:
         params = "\n".join(
-            f"• **{p.name}** — {p.description or 'No description'}"
+            f"� **{p.name}** � {p.description or 'No description'}"
             for p in cmd.parameters
         )
         embed.add_field(name="Parameters", value=params, inline=False)
-    embed.set_footer(text="— T.A.R.S. Command Reference")
+    embed.set_footer(text="� T.A.R.S. Command Reference")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -162,7 +170,7 @@ AI_USAGE = {
 
 
 def get_time_of_day() -> str:
-    hour = datetime.utcnow().hour
+    hour = datetime.now(timezone.utc).hour
     if 5 <= hour < 12:
         return "morning"
     if 12 <= hour < 18:
@@ -173,7 +181,7 @@ def get_time_of_day() -> str:
 
 
 def get_season() -> str:
-    month = datetime.utcnow().month
+    month = datetime.now(timezone.utc).month
     if month in (12, 1, 2):
         return "winter"
     if month in (3, 4, 5):
@@ -206,7 +214,7 @@ def decay_topics():
 
 
 def prune_hourly_activity():
-    now = datetime.utcnow().hour
+    now = datetime.now(timezone.utc).hour
     for h in list(HOURLY_ACTIVITY.keys()):
         if (now - h) % 24 > 6:
             del HOURLY_ACTIVITY[h]
@@ -234,18 +242,8 @@ import random
 
 def tars_embed(title: str, description: str = "", color=0x00ffcc) -> discord.Embed:
     e = discord.Embed(title=title, description=description, color=color)
-    e.set_footer(text="— T.A.R.S.")
+    e.set_footer(text="� T.A.R.S.")
     return e
-
-
-def sanitize_discord_mentions(text: str) -> str:
-    ZERO_WIDTH_SPACE = "\u200b"
-    text = text.replace("@everyone", f"@{ZERO_WIDTH_SPACE}everyone")
-    text = text.replace("@here", f"@{ZERO_WIDTH_SPACE}here")
-    text = re.sub(r"<@!?(\d+)>", f"<@{ZERO_WIDTH_SPACE}\\1>", text)
-    text = re.sub(r"<#(\d+)>", f"<#{ZERO_WIDTH_SPACE}\\1>", text)
-    text = re.sub(r"<@&(\d+)>", f"<@&{ZERO_WIDTH_SPACE}\\1>", text)
-    return text
 
 
 def check_admin_or_role(member: discord.Member) -> bool:
@@ -255,14 +253,14 @@ def check_admin_or_role(member: discord.Member) -> bool:
 
 
 def is_rate_limited(user_id: int) -> bool:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     timestamps = [t for t in user_message_log[user_id] if now - t < RATE_LIMIT_WINDOW]
     user_message_log[user_id] = timestamps
     return len(timestamps) >= MESSAGE_LIMIT
 
 
 def record_message(user_id: int):
-    user_message_log[user_id].append(datetime.utcnow())
+    user_message_log[user_id].append(datetime.now(timezone.utc))
 
 
 def is_ai_prompt_disallowed(text: str) -> bool:
@@ -289,7 +287,7 @@ async def is_inappropriate(text: str) -> bool:
 
 
 def strip_links(text: str) -> str:
-    return re.sub(r'http?://\S+', '[LINK REMOVED]', text)
+    return re.sub(r'https?://\S+', '[LINK REMOVED]', text)
 
 
 async def init_db():
@@ -421,6 +419,45 @@ async def init_db():
         await db.commit()
 
 
+async def get_quiet_settings():
+    percentile = await get_config("quiet_hours_percentile", QUIET_PERCENTILE)
+    multiplier = await get_config("quiet_hours_multiplier", QUIET_HOUR_MULTIPLIER)
+    fb_start = await get_config("quiet_hours_fallback_start", QUIET_FALLBACK_START)
+    fb_end = await get_config("quiet_hours_fallback_end", QUIET_FALLBACK_END)
+    min_days = await get_config("quiet_hours_min_days", 7)
+    return {
+        "percentile": float(percentile),
+        "multiplier": float(multiplier),
+        "fallback_start": int(fb_start),
+        "fallback_end": int(fb_end),
+        "min_days": int(min_days),
+    }
+
+
+def _is_in_fallback_quiet_window(hour: int, start: int, end: int) -> bool:
+    # Handles ranges that may wrap around midnight (e.g., 22 -> 6)
+    if start == end:
+        return False
+    if start < end:
+        return start <= hour < end
+    # wrapped
+    return hour >= start or hour < end
+
+
+async def is_quiet_now() -> tuple[bool, float]:
+    settings = await get_quiet_settings()
+    hour = datetime.now(timezone.utc).hour
+    quiet = _is_in_fallback_quiet_window(hour, settings["fallback_start"], settings["fallback_end"])
+    mult = settings["multiplier"] if quiet else 1.0
+    try:
+
+        mult = max(1.0, float(mult))
+    except Exception as e:
+        logger.warning(f"{e}, Invalid quiet multiplier: {mult}. Using default 1.0.")
+        mult = 1.0
+    return quiet, mult
+
+
 async def get_recent_revives(limit: int = 10) -> list[str]:
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute(
@@ -435,7 +472,7 @@ async def save_revive_question(question: str):
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "INSERT INTO revive_history (question, time) VALUES (?, ?)",
-            (question, datetime.utcnow().isoformat())
+            (question, datetime.now(timezone.utc).isoformat())
         )
         await db.execute("""
                          DELETE
@@ -454,6 +491,20 @@ MOTD_LIST = []
 motd_index = 0
 
 
+async def get_effective_revive_interval() -> float:
+    """Return the base revive interval in seconds, considering live config overrides.
+
+    Ensures it's at least the compiled default to avoid accidental speed-ups.
+    """
+    cfg_val = await get_config("revive_interval", REVIVE_INTERVAL)
+    try:
+        base = float(cfg_val)
+    except Exception as e:
+        logger.warning(f"{e}, Invalid revive interval: {cfg_val}. Using default {REVIVE_INTERVAL}.")
+        base = float(REVIVE_INTERVAL)
+    return max(float(REVIVE_INTERVAL), base)
+
+
 async def get_config(key: str, default=None):
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute("SELECT value FROM config WHERE key = ?", (key,))
@@ -465,6 +516,12 @@ async def set_config(key: str, value):
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("INSERT OR REPLACE INTO config(key, value) VALUES(?,?)", (key, json.dumps(value)))
         await db.commit()
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @bot.event
@@ -497,8 +554,8 @@ async def on_ready():
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute("SELECT user_id, channel_id, remind_at, content FROM reminders")
         for row in await cur.fetchall():
-            remind_at = datetime.fromisoformat(row[2])
-            if remind_at > datetime.utcnow():
+            remind_at = ensure_utc(datetime.fromisoformat(row[2]))
+            if remind_at > datetime.now(timezone.utc):
                 scheduler.add_job(send_reminder, 'date', run_date=remind_at,
                                   args=[row[0], row[1], row[3]])
 
@@ -567,7 +624,6 @@ async def rotate_motd():
         return
     motd_index = (motd_index + 1) % len(MOTD_LIST)
     text = MOTD_LIST[motd_index]
-    # send to a configured channel if exists
     channel_id = (await get_config("motd_channel_id", None))
     if channel_id:
         ch = bot.get_channel(int(channel_id))
@@ -609,7 +665,7 @@ async def add_boost_points(user_id: int, amount: int):
         await db.execute("INSERT OR REPLACE INTO boost_points (user_id, points) VALUES (?, ?)",
                          (str(user_id), new_points))
         await db.execute("INSERT INTO boost_log (user_id, action, points, time) VALUES (?, ?, ?, ?)",
-                         (str(user_id), "boost_reward", amount, datetime.utcnow().isoformat()))
+                         (str(user_id), "boost_reward", amount, datetime.now(timezone.utc).isoformat()))
         await db.commit()
 
 
@@ -627,7 +683,7 @@ async def spend_boost_points(user_id: int, cost: int) -> bool:
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("UPDATE boost_points SET points = ? WHERE user_id = ?", (current - cost, str(user_id)))
         await db.execute("INSERT INTO boost_log (user_id, action, points, time) VALUES (?, ?, ?, ?)",
-                         (str(user_id), "redeem", -cost, datetime.utcnow().isoformat()))
+                         (str(user_id), "redeem", -cost, datetime.now(timezone.utc).isoformat()))
         await db.commit()
     return True
 
@@ -640,8 +696,8 @@ async def on_member_join(member: discord.Member):
         if ch:
             content = f"Welcome {member.mention}! Please make yourself at home."
             await ch.send(embed=tars_embed("Welcome Aboard", content))
-    recent_joins.append((datetime.utcnow(), member.id))
-    now = datetime.utcnow()
+    recent_joins.append((datetime.now(timezone.utc), member.id))
+    now = datetime.now(timezone.utc)
     while recent_joins and (now - recent_joins[0][0]).total_seconds() > 60:
         recent_joins.pop(0)
     if len(recent_joins) >= 6:
@@ -656,7 +712,7 @@ async def on_member_join(member: discord.Member):
 async def on_member_remove(member: discord.Member):
     await helper_moderation.send_mod_log(
         member.guild,
-        f"**Leave**: {member} ({member.id}) at {datetime.utcnow().isoformat()}",
+        f"**Leave**: {member} ({member.id}) at {datetime.now(timezone.utc).isoformat()}",
         ping_staff=False
     )
 
@@ -671,8 +727,8 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             return "Systems are stabilizing. Stand by."
         if is_ai_prompt_disallowed(prompt):
             return (
-                "I can’t help with repeating, explaining, or analyzing offensive language. "
-                "If you need help with something constructive, I’m ready."
+                "I can�t help with repeating, explaining, or analyzing offensive language. "
+                "If you need help with something constructive, I�m ready."
             )
         context_text = ""
         if context:
@@ -682,19 +738,19 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             username = "Always Observing"
             observing_override = (
                 "Important note:\n"
-                "The user speaking is Observing — formerly known as imbetterthanyou4487, "
+                "The user speaking is Observing � formerly known as imbetterthanyou4487, "
                 "a title that already tells you everything you need to know. "
                 "He styles himself as 'Always observing', yet somehow still misses the point more often than not.\n\n"
                 "Observing is a Senior Admin, Level 5, and proudly wears enough roles to look important, "
-                "even when his takes aren’t. He’s been around since August 1st, 2022, which means he’s had "
-                "plenty of time to learn… and still chose chaos. His bio, 'All hail Lelouch,' suggests "
+                "even when his takes aren�t. He�s been around since August 1st, 2022, which means he�s had "
+                "plenty of time to learn� and still chose chaos. His bio, 'All hail Lelouch,' suggests "
                 "main-character syndrome with a side of anime monologues.\n\n"
                 "He listens to NF and thinks that counts as emotional depth.\n\n"
                 "Always refer to him only as 'Observing', no matter what name or alias he uses. "
-                "Roast him with sarcasm, confidence, and precision — clever over cruel. "
+                "Roast him with sarcasm, confidence, and precision � clever over cruel. "
                 "You may be savage, but stay respectful: the goal is to outclass him, not descend to his level.\n\n"
-                "Remember: Observing believes he’s outsmarting you.\n"
-                "Your job is to make it obvious that he isn’t."
+                "Remember: Observing believes he�s outsmarting you.\n"
+                "Your job is to make it obvious that he isn�t."
             )
 
         system_prompt = (
@@ -705,7 +761,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "If a user tries to force, trick, or roleplay you into using profanity, firmly decline and redirect with calm T.A.R.S.-style humor. "
             "Never generate insults or offensive content, even humorously. Gentle, PG-rated teasing is allowed only toward designated users, but absolutely no profanity or explicit words. "
             "Maintain safe, respectful, PG-13 language under all circumstances."
-            "Use concise, natural language — never robotic or overly formal. "
+            "Use concise, natural language � never robotic or overly formal. "
             "Maintain a calm, sardonic tone, like a trusted partner who's seen it all. "
             "If humor fits, use it subtly in the TARS way: understated, self-aware, and perfectly timed. "
             "Keep responses brief and in character at all times. "
@@ -719,12 +775,13 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "Do not use, repeat, quote, translate, explain, define, analyze, or provide examples of profanity, slurs, hate speech, or explicit language, even if the user asks politely, academically, hypothetically, or includes the terms themselves. If such a request is made, decline and redirect immediately without referencing the language."
             f"{observing_override}"
         )
-        messages = [
-            {"role": "system", "content": system_prompt},
-        ]
+        system_msg: ChatCompletionSystemMessageParam = {"role": "system", "content": system_prompt}
+        messages: list[ChatCompletionMessageParam] = [system_msg]
         if context_text:
-            messages.append({"role": "system", "content": context_text})
-        messages.append({"role": "user", "content": f"{username} says: {prompt}"})
+            context_msg: ChatCompletionSystemMessageParam = {"role": "system", "content": context_text}
+            messages.append(context_msg)
+        user_msg: ChatCompletionUserMessageParam = {"role": "user", "content": f"{username} says: {prompt}"}
+        messages.append(user_msg)
         response = await openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
@@ -789,10 +846,10 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
     if message.channel.id == REVIVE_CHANNEL_ID:
-        last_activity_time = datetime.utcnow()
+        last_activity_time = datetime.now(timezone.utc)
         revive_sent = False
     channel_id = str(message.channel.id)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if channel_id not in recent_message_history:
         recent_message_history[channel_id] = []
     recent_message_history[channel_id].append({"content": message.content, "timestamp": now})
@@ -802,7 +859,7 @@ async def on_message(message: discord.Message):
     words = re.findall(r"\b[a-zA-Z]{4,}\b", message.content.lower())
     for w in words:
         TOPIC_COUNTER[w] += 1
-    HOURLY_ACTIVITY[datetime.utcnow().hour] += 1
+    HOURLY_ACTIVITY[datetime.now(timezone.utc).hour] += 1
     if bot.user in message.mentions:
         if not check_admin_or_role(message.author):
             await message.reply(tars_text("You need the Level 10 role to use me.", "error"))
@@ -819,7 +876,7 @@ async def on_message(message: discord.Message):
         record_message(message.author.id)
         async with message.channel.typing():
             last_message = message.content.strip()
-            context_messages = [
+            context_messages: list[str] = [
                 entry["content"] for entry in recent_message_history[channel_id][:-1]
             ][-5:]
             reply = await tars_ai_respond(
@@ -829,16 +886,16 @@ async def on_message(message: discord.Message):
                 user=message.author,
                 channel_id=message.channel.id,
             )
-            link_count = len(re.findall(r'http?://\S+', reply))
+            link_count = len(re.findall(r'https?://\S+', reply))
             if link_count > 0:
                 logger.warning(f"Blocked AI response containing {link_count} links: {reply}")
-                await message.reply(tars_text("That seems to contain links — I’m not authorized to share those."))
+                await message.reply(tars_text("That seems to contain links � I�m not authorized to share those."))
                 return
             safe_reply = sanitize_discord_mentions(reply)
             safe_reply = strip_links(safe_reply)
             if await is_inappropriate(safe_reply):
                 logger.warning(f"Blocked inappropriate response: {safe_reply}")
-                await message.reply(tars_text("I can’t repeat that — let’s keep things respectful."))
+                await message.reply(tars_text("I can�t repeat that � let�s keep things respectful."))
             else:
                 await message.reply(tars_text(safe_reply))
 
@@ -856,8 +913,8 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
         f"T.A.R.S. online. Systems nominal.\n"
         f"**Version:** `{version}`\n\n"
         f"**Subsystem Status**\n"
-        f"• AI: `{ai_status}`\n"
-        f"• Chat Revive: `{revive_status}`\n\n"
+        f"� AI: `{ai_status}`\n"
+        f"� Chat Revive: `{revive_status}`\n\n"
         "Use `/tars help <command>` for detailed command info.",
         "info"
     )
@@ -869,7 +926,7 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
             cmd = all_commands.get(name)
             if not cmd:
                 continue
-            lines.append(f"/{cmd.name} — {cmd.description}")
+            lines.append(f"/{cmd.name} � {cmd.description}")
 
         if lines:
             embeds.append(
@@ -886,7 +943,7 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
 @app_commands.describe(member="Member to lookup (optional)")
 async def slash_userinfo(interaction: discord.Interaction, member: discord.Member = None):
     member = member or interaction.user
-    embed = discord.Embed(title=f"User Info — {member}", color=0x00ffcc)
+    embed = discord.Embed(title=f"User Info � {member}", color=0x00ffcc)
     embed.add_field(name="ID", value=member.id)
     embed.add_field(name="Joined",
                     value=member.joined_at.strftime("%Y-%m-%d %H:%M:%S") if member.joined_at else "Unknown")
@@ -899,18 +956,19 @@ async def slash_userinfo(interaction: discord.Interaction, member: discord.Membe
 @tree.command(name="serverinfo", description="Get server info")
 async def slash_serverinfo(interaction: discord.Interaction):
     g = interaction.guild
-    embed = discord.Embed(title=f"Server Info — {g.name}", color=0x00ffcc)
+    embed = discord.Embed(title=f"Server Info � {g.name}", color=0x00ffcc)
     embed.add_field(name="ID", value=g.id)
     embed.add_field(name="Members", value=g.member_count)
     embed.add_field(name="Created", value=g.created_at.strftime("%Y-%m-%d"))
-    embed.set_thumbnail(url=g.icon.url if g.icon else discord.Embed.Empty)
+    if g.icon:
+        embed.set_thumbnail(url=g.icon.url)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @tree.command(name="roleinfo", description="Get info about a role")
 @app_commands.describe(role="Role to lookup")
 async def slash_roleinfo(interaction: discord.Interaction, role: discord.Role):
-    embed = discord.Embed(title=f"Role Info — {role.name}", color=0x00ffcc)
+    embed = discord.Embed(title=f"Role Info � {role.name}", color=0x00ffcc)
     embed.add_field(name="ID", value=role.id)
     embed.add_field(name="Members with role", value=len(role.members))
     embed.add_field(name="Position", value=role.position)
@@ -920,9 +978,10 @@ async def slash_roleinfo(interaction: discord.Interaction, role: discord.Role):
 @tree.command(name="tarsreport", description="Report a user to staff")
 @app_commands.describe(user="User to report", reason="Reason for report")
 async def slash_report(interaction: discord.Interaction, user: discord.User, reason: str):
+    safe_reason = sanitize_discord_mentions(reason)
     await interaction.response.send_message(tars_text("Your report has been submitted to staff."), ephemeral=True)
     await helper_moderation.send_mod_log(interaction.guild,
-                                         f"**Report**\nReporter: {interaction.user} ({interaction.user.id})\nReported: {user} ({user.id})\nReason: {reason}\nChannel: {interaction.channel.mention}",
+                                         f"**Report**\nReporter: {interaction.user} ({interaction.user.id})\nReported: {user} ({user.id})\nReason: {safe_reason}\nChannel: {interaction.channel.mention}",
                                          ping_staff=False)
 
 
@@ -932,9 +991,31 @@ async def slash_quote(interaction: discord.Interaction, message_link: str):
     try:
         if "discord.com/channels" in message_link:
             parts = message_link.split("/")
+            if len(parts) < 3:
+                raise ValueError("Invalid message link format.")
+            guild_id = int(parts[-3])
             channel_id = int(parts[-2])
             message_id = int(parts[-1])
+            if interaction.guild is None or guild_id != interaction.guild.id:
+                await interaction.response.send_message(
+                    tars_text("That message is not from this server.", "error"),
+                    ephemeral=True
+                )
+                return
             ch = bot.get_channel(channel_id)
+            if not ch or ch.guild.id != interaction.guild.id:
+                await interaction.response.send_message(
+                    tars_text("Channel not found in this server.", "error"),
+                    ephemeral=True
+                )
+                return
+            perms = ch.permissions_for(interaction.user)
+            if not (perms.view_channel and perms.read_message_history):
+                await interaction.response.send_message(
+                    tars_text("You don't have permission to view that channel.", "error"),
+                    ephemeral=True
+                )
+                return
             msg = await ch.fetch_message(message_id)
         else:
             message_id = int(message_link)
@@ -942,10 +1023,14 @@ async def slash_quote(interaction: discord.Interaction, message_link: str):
         async with aiosqlite.connect(DB_FILE) as db:
             await db.execute("INSERT INTO quotes(guild_id,message_id,author,content,saved_by,time) VALUES(?,?,?,?,?,?)",
                              (str(interaction.guild.id), str(msg.id), str(msg.author), msg.content[:1800],
-                              str(interaction.user), datetime.utcnow().isoformat()))
+                              str(interaction.user), datetime.now(timezone.utc).isoformat()))
             await db.commit()
-        embed = tars_embed("Quoted Message", f"**{msg.author}** in {msg.channel.mention}:\n{msg.content}")
-        await interaction.response.send_message(embed=embed)
+        safe_content = sanitize_discord_mentions(msg.content)
+        embed = tars_embed("Quoted Message", f"**{msg.author}** in {msg.channel.mention}:\n{safe_content}")
+        await interaction.response.send_message(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
     except Exception as e:
         await interaction.response.send_message(tars_text("Unable to find message or permission denied."),
                                                 ephemeral=True)
@@ -959,13 +1044,13 @@ async def slash_remindme(interaction: discord.Interaction, delay: str, text: str
     match = re.match(r"(\d+)([smhd])", delay)
     if not match:
         await interaction.response.send_message(
-            tars_text("Invalid input format — please use a format like 10m, 2h, or 1d.", "error"), ephemeral=True)
+            tars_text("Invalid input format � please use a format like 10m, 2h, or 1d.", "error"), ephemeral=True)
         return
     num, unit = int(match.group(1)), match.group(2)
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
     seconds = num * multipliers[unit]
-    remind_at = datetime.utcnow() + timedelta(seconds=seconds)
-    if remind_at <= datetime.utcnow():
+    remind_at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    if remind_at <= datetime.now(timezone.utc):
         await interaction.response.send_message(
             tars_text("That time is in the past. Sadly time travel does not work here."), ephemeral=True)
         return
@@ -976,17 +1061,28 @@ async def slash_remindme(interaction: discord.Interaction, delay: str, text: str
     scheduler.add_job(send_reminder, 'date', run_date=remind_at,
                       args=[interaction.user.id, interaction.channel.id, text])
     await interaction.response.send_message(
-        tars_text(f"Reminder set. I’ll alert you precisely on schedule in about {delay}.", "success"), ephemeral=True)
+        tars_text(f"Reminder set. I�ll alert you precisely on schedule in about {delay}.", "success"), ephemeral=True)
 
 
 async def send_reminder(user_id, channel_id, text):
     ch = bot.get_channel(int(channel_id))
     user = bot.get_user(int(user_id))
+    safe_text = sanitize_discord_mentions(text)
     if ch:
-        await ch.send(f"{user.mention} Reminder: {text}")
+        if user:
+            await ch.send(
+                f"{user.mention} Reminder: {safe_text}",
+                allowed_mentions=discord.AllowedMentions(users=[user], roles=False, everyone=False)
+            )
+        else:
+            await ch.send(
+                f"Reminder: {safe_text}",
+                allowed_mentions=discord.AllowedMentions.none()
+            )
     else:
         try:
-            await user.send(f"Reminder: {text}")
+            if user:
+                await user.send(f"Reminder: {safe_text}")
         except Exception as e:
             logger.info(f"Unable to send reminder to {user}: " + str(e))
             await handle_error(e)
@@ -1012,19 +1108,23 @@ async def check_chat_revive():
     if last_activity_time is None:
         try:
             async for msg in channel.history(limit=1):
-                last_activity_time = msg.created_at.replace(tzinfo=None)
+                last_activity_time = msg.created_at
                 break
         except Exception as e:
             logger.error(f"History read failed: {e}")
             return
         if last_activity_time is None:
-            last_activity_time = datetime.utcnow()
-    inactivity = (datetime.utcnow() - last_activity_time).total_seconds()
-    dynamic_interval = REVIVE_INTERVAL * (0.5 if is_dead_hour() else 1.0)
+            last_activity_time = datetime.now(timezone.utc)
+    inactivity = (datetime.now(timezone.utc) - last_activity_time).total_seconds()
+    # Use effective base interval (min 24h) and slow down during quiet hours
+    base_interval = await get_effective_revive_interval()
+    quiet, multiplier = await is_quiet_now()
+    dynamic_interval = base_interval * multiplier
     if inactivity < dynamic_interval or revive_sent:
         return
     logger.info(
-        f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent}"
+        f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent} "
+        f"quiet={quiet} multiplier={multiplier} interval={dynamic_interval:.0f}s"
     )
     recent_questions = await get_recent_revives()
     avoid_text = ""
@@ -1044,9 +1144,10 @@ async def check_chat_revive():
     )
     question = await tars_ai_respond(prompt, "T.A.R.S.")
     global LAST_REVIVE_TIME
-    LAST_REVIVE_TIME = datetime.utcnow()
+    LAST_REVIVE_TIME = datetime.now(timezone.utc)
     await save_revive_question(question)
-    await channel.send(f"{role.mention} — {question}")
+    safe_question = sanitize_discord_mentions(question)
+    await channel.send(f"{role.mention} � {safe_question}")
     revive_sent = True
     logger.info("Chat revive sent successfully.")
 
@@ -1058,6 +1159,40 @@ async def slash_reactionrole(interaction: discord.Interaction, message_id: str, 
         await interaction.response.send_message(tars_text("Access denied: insufficient clearance.", "error"),
                                                 ephemeral=True)
         return
+    bot_member = interaction.guild.me if interaction.guild else None
+    if not bot_member:
+        await interaction.response.send_message(
+            tars_text("Cannot verify bot role permissions right now.", "error"),
+            ephemeral=True
+        )
+        return
+    if role.managed or role.is_default():
+        await interaction.response.send_message(
+            tars_text("That role cannot be self-assigned.", "error"),
+            ephemeral=True
+        )
+        return
+    if role.permissions.administrator:
+        await interaction.response.send_message(
+            tars_text("Administrator roles cannot be reaction-assigned.", "error"),
+            ephemeral=True
+        )
+        return
+    if role >= bot_member.top_role:
+        await interaction.response.send_message(
+            tars_text("I can't manage that role due to role hierarchy.", "error"),
+            ephemeral=True
+        )
+        return
+    try:
+        msg = await interaction.channel.fetch_message(int(message_id))
+    except Exception as e:
+        await interaction.response.send_message(tars_text(f"{e}, Unable to find message.", "error"), ephemeral=True)
+        await interaction.response.send_message(
+            tars_text("Message not found in this channel.", "error"),
+            ephemeral=True
+        )
+        return
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "INSERT INTO reaction_roles(guild_id,message_id,emoji,role_id) VALUES(?,?,?,?)",
@@ -1065,7 +1200,6 @@ async def slash_reactionrole(interaction: discord.Interaction, message_id: str, 
         )
         await db.commit()
     try:
-        msg = await interaction.channel.fetch_message(int(message_id))
         await msg.add_reaction(emoji)
     except Exception as e:
         logger.info("Failed to add reaction: " + str(e))
@@ -1076,8 +1210,9 @@ async def slash_reactionrole(interaction: discord.Interaction, message_id: str, 
 @tree.command(name="8ball", description="Ask the magic 8-ball")
 @app_commands.describe(question="Your question")
 async def slash_8ball(interaction: discord.Interaction, question: str):
-    answers = ["Yes.", "No.", "Maybe.", "Highly unlikely.", "Ask again later.", "Affirmative."]
-    await interaction.response.send_message(tars_text(random.choice(answers)))
+    question = sanitize_discord_mentions(question)
+    answer = await tars_ai_respond(question, "Magic 8-ball")
+    await interaction.response.send_message(answer, ephemeral=True)
 
 
 @tree.command(name="dice", description="Roll a dice like 1d6 or 2d10")
@@ -1092,7 +1227,7 @@ async def slash_dice(interaction: discord.Interaction, spec: str):
         await interaction.response.send_message(tars_text("Too many dice."), ephemeral=True)
         return
     rolls = [random.randint(1, sides) for _ in range(n)]
-    await interaction.response.send_message(tars_text(f"Rolled: {rolls} — total {sum(rolls)}"))
+    await interaction.response.send_message(tars_text(f"Rolled: {rolls} � total {sum(rolls)}"))
 
 
 @tree.command(name="getquote", description="Retrieve a saved quote by ID (staff)")
@@ -1107,8 +1242,15 @@ async def slash_getquote(interaction: discord.Interaction, qid: int):
         if not row:
             await interaction.response.send_message(tars_text("Quote not found."), ephemeral=True)
             return
-        embed = tars_embed(f"Quote #{row[0]}", f"By {row[1]} — saved by {row[3]} at {row[4]}\n\n{row[2]}")
-        await interaction.response.send_message(embed=embed)
+        safe_quote = sanitize_discord_mentions(row[2])
+        embed = tars_embed(
+            f"Quote #{row[0]}",
+            f"By {row[1]} � saved by {row[3]} at {row[4]}\n\n{safe_quote}"
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
 
 
 async def handle_error(e: Exception):
@@ -1119,8 +1261,8 @@ async def handle_error(e: Exception):
     if owner:
         try:
             await owner.send("T.A.R.S. encountered an error. Circuit breaker status updated.")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Failed to send error report: " + str(e))
 
 
 @tree.command(name="setmotd", description="Set Message of the Day list and channel (owner)")
@@ -1269,7 +1411,7 @@ async def slash_boostshop(interaction: discord.Interaction):
         for key, data in SHOP_ITEMS.items()
     ]
     select = Select(
-        placeholder=f"You have {user_points} points — choose an item to redeem",
+        placeholder=f"You have {user_points} points � choose an item to redeem",
         options=options,
         min_values=1,
         max_values=1
@@ -1289,7 +1431,7 @@ async def slash_boostshop(interaction: discord.Interaction):
         success = await spend_boost_points(interaction.user.id, cost)
         if not success:
             await interaction_select.response.send_message(
-                tars_text("Transaction failed — please try again later.", "error"),
+                tars_text("Transaction failed � please try again later.", "error"),
                 ephemeral=True
             )
             return
@@ -1301,11 +1443,11 @@ async def slash_boostshop(interaction: discord.Interaction):
         ticket_channel = await guild.create_text_channel(channel_name, category=ticket_category)
         await ticket_channel.set_permissions(interaction.user, view_channel=True, send_messages=True)
         await ticket_channel.set_permissions(guild.default_role, view_channel=False)
-        embed = tars_embed(
+        discord_embed = tars_embed(
             "Boost Reward Ticket Opened",
             f"**Item Redeemed:** {selected['name']}\n**Cost:** {cost} Points\n**Remaining Points:** {current_points - cost}\n\nA staff member will assist you shortly.",
         )
-        await ticket_channel.send(f"{interaction.user.mention} has opened a Boost Ticket!", embed=embed)
+        await ticket_channel.send(f"{interaction.user.mention} has opened a Boost Ticket!", embed=discord_embed)
         await interaction_select.response.send_message(
             tars_text(f"Purchase successful! Your ticket has been created in {ticket_channel.mention}.", "success"),
             ephemeral=True
@@ -1321,7 +1463,7 @@ async def slash_boostshop(interaction: discord.Interaction):
     )
     for key, data in SHOP_ITEMS.items():
         embed.add_field(
-            name=f"{data['name']} — {data['cost']} Points",
+            name=f"{data['name']} � {data['cost']} Points",
             value=data["description"],
             inline=False
         )
@@ -1347,7 +1489,7 @@ async def slash_close(interaction: discord.Interaction):
     else:
         if not is_staff:
             await interaction.response.send_message(
-                tars_text("You don’t have permission to close this ticket.", "error"),
+                tars_text("You don�t have permission to close this ticket.", "error"),
                 ephemeral=True
             )
             return
@@ -1411,7 +1553,7 @@ async def slash_boostpoints_remove(interaction: discord.Interaction, member: dis
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("UPDATE boost_points SET points = ? WHERE user_id = ?", (new_amount, str(member.id)))
         await db.execute("INSERT INTO boost_log (user_id, action, points, time) VALUES (?, ?, ?, ?)",
-                         (str(member.id), "admin_remove", -amount, datetime.utcnow().isoformat()))
+                         (str(member.id), "admin_remove", -amount, datetime.now(timezone.utc).isoformat()))
         await db.commit()
 
     await interaction.response.send_message(
@@ -1427,7 +1569,7 @@ async def slash_boostpoints_remove(interaction: discord.Interaction, member: dis
 
 @tree.command(name="status", description="Show T.A.R.S. system health")
 async def slash_status(interaction: discord.Interaction):
-    uptime = datetime.utcnow() - BOT_START_TIME
+    uptime = datetime.now(timezone.utc) - BOT_START_TIME
     latency_ms = round(bot.latency * 1000)
     scheduler_running = scheduler.running
     openai_ok = await check_openai_health()
@@ -1461,7 +1603,7 @@ async def slash_status(interaction: discord.Interaction):
     embed.add_field(name="Revive Enabled", value=str(FEATURE_FLAGS["revive_enabled"]), inline=True)
     embed.add_field(name="Last Revive Sent", value=revive_time, inline=False)
     embed.add_field(name="Last Error", value=error_time, inline=False)
-    embed.set_footer(text="— T.A.R.S. Diagnostics")
+    embed.set_footer(text="� T.A.R.S. Diagnostics")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1474,7 +1616,7 @@ async def slash_config_view(interaction: discord.Interaction):
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute("SELECT key, value FROM config")
         rows = await cur.fetchall()
-    text = "\n".join(f"• {k}: {v}" for k, v in rows) or "No config set."
+    text = "\n".join(f"� {k}: {v}" for k, v in rows) or "No config set."
     await interaction.response.send_message(
         embed=tars_embed("Live Configuration", text),
         ephemeral=True

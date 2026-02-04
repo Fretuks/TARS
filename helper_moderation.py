@@ -1,11 +1,11 @@
-﻿import asyncio
+import asyncio
 import json
 
 import discord
 import random
 import re
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from tars import tars_text
 from config import STAFF_ROLES_FOR_PING, recent_messages, recent_message_timestamps, \
@@ -13,6 +13,16 @@ from config import STAFF_ROLES_FOR_PING, recent_messages, recent_message_timesta
 
 logger = logging.getLogger("tars")
 WARN_THRESHOLD = 3
+
+
+def sanitize_discord_mentions(text: str) -> str:
+    zero_width_space = "\u200b"
+    text = text.replace("@everyone", f"@{zero_width_space}everyone")
+    text = text.replace("@here", f"@{zero_width_space}here")
+    text = re.sub(r"<@!?(\d+)>", f"<@{zero_width_space}\\1>", text)
+    text = re.sub(r"<#(\d+)>", f"<#{zero_width_space}\\1>", text)
+    text = re.sub(r"<@&(\d+)>", f"<@&{zero_width_space}\\1>", text)
+    return text
 
 
 def is_user_immune(member: discord.Member) -> bool:
@@ -33,6 +43,7 @@ async def handle_moderation(message):
     if message.guild is None:
         return
     text = message.content or ""
+    safe_text = sanitize_discord_mentions(text)
     uid = str(message.author.id)
     g = message.guild
     banned_words = await get_banned_words()
@@ -69,14 +80,14 @@ async def handle_moderation(message):
             )
             await dm_send_safe(
                 message.author,
-                f"T.A.R.S. Warning {count}/3: Use of banned word (‘{word}’). Message deleted."
+                f"T.A.R.S. Warning {count}/3: Use of banned word (�{word}�). Message deleted."
             )
-            await send_mod_log(
-                g,
-                f"Banned word '{word}' used by {message.author} in {message.channel.mention}. Warnings {count}.",
-                ping_staff=False
-            )
-            return
+        await send_mod_log(
+            g,
+            f"Banned word '{word}' used by {message.author} in {message.channel.mention}. Warnings {count}.",
+            ping_staff=False
+        )
+        return
     if len(text.splitlines()) > 10 or len(text) > 500:
         count = await increment_warning(uid)
         await add_warn_log(uid, "Text wall / spam")
@@ -111,7 +122,7 @@ async def handle_moderation(message):
             ping_staff=(count >= WARN_THRESHOLD)
         )
         return
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     msg_list = recent_messages.get(uid, [])
     ts_list = recent_message_timestamps.get(uid, [])
     msg_list.append(text)
@@ -150,7 +161,7 @@ async def handle_moderation(message):
         return
     if NWORD_PATTERN.search(text):
         reaction = random.choice([
-            "Interesting choice of words… not recommended.",
+            "Interesting choice of words� not recommended.",
             "Attempting human chaos detected. Deleting."
         ])
         count = await helper_warn(message, reaction, uid)
@@ -160,14 +171,14 @@ async def handle_moderation(message):
 
         await send_mod_log(
             g,
-            f"Banned word by {message.author} in {message.channel.mention}: \"{text}\". Warnings {count}",
+            f"Banned word by {message.author} in {message.channel.mention}: \"{safe_text}\". Warnings {count}",
             ping_staff=(count >= WARN_THRESHOLD)
         )
         return
     for pat in SUICIDE_PATTERNS:
         if pat.search(text):
             reaction = random.choice([
-                "Protocol violation. That’s a negative.",
+                "Protocol violation. That�s a negative.",
                 "Error detected: inappropriate content. Executing deletion."
             ])
             count = await helper_warn(message, reaction, uid)
@@ -179,7 +190,7 @@ async def handle_moderation(message):
             await send_mod_log(
                 g,
                 f"Self-harm phrase by {message.author} in {message.channel.mention}. "
-                f"Warnings {count}. Message: \"{text}\"",
+                f"Warnings {count}. Message: \"{safe_text}\"",
                 ping_staff=(count >= WARN_THRESHOLD)
             )
             return
@@ -256,7 +267,7 @@ async def add_warn_log(user_id: str, reason: str, moderator: str = "T.A.R.S."):
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "INSERT INTO warns_log(user_id, reason, time, moderator) VALUES(?,?,?,?)",
-            (user_id, reason, datetime.utcnow().isoformat(), moderator)
+            (user_id, reason, datetime.now(timezone.utc).isoformat(), moderator)
         )
         await db.commit()
 
@@ -284,7 +295,7 @@ async def helper_warn(message, reaction, uid):
 
 
 async def send_mod_log(guild: discord.Guild, message: str, ping_staff: bool = False):
-    log_channel = discord.utils.get(guild.text_channels, name="╰-︰🤖tars-logs")
+    log_channel = discord.utils.get(guild.text_channels, name="?-???tars-logs")
 
     if not log_channel:
         if not guild.me.guild_permissions.manage_channels:
@@ -295,7 +306,7 @@ async def send_mod_log(guild: discord.Guild, message: str, ping_staff: bool = Fa
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 guild.me: discord.PermissionOverwrite(view_channel=True)
             }
-            log_channel = await guild.create_text_channel("╰-︰🤖tars-logs", overwrites=overwrites)
+            log_channel = await guild.create_text_channel("?-???tars-logs", overwrites=overwrites)
         except Exception as e:
             logger.exception(f"Could not create log channel: {e}")
             return
