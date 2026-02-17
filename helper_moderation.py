@@ -13,6 +13,20 @@ from config import STAFF_ROLES_FOR_PING, recent_messages, recent_message_timesta
 
 logger = logging.getLogger("tars")
 WARN_THRESHOLD = 3
+MOD_LOG_CHANNEL_NAME = "tars-logs"
+
+
+def _get_mod_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    exact_match = discord.utils.get(guild.text_channels, name=MOD_LOG_CHANNEL_NAME)
+    if exact_match:
+        return exact_match
+
+    # Backward compatibility for legacy/malformed channel names that still include "tars-logs".
+    for channel in guild.text_channels:
+        if "tars-logs" in channel.name:
+            return channel
+    return None
+
 
 
 def sanitize_discord_mentions(text: str) -> str:
@@ -80,7 +94,7 @@ async def handle_moderation(message):
             )
             await dm_send_safe(
                 message.author,
-                f"T.A.R.S. Warning {count}/3: Use of banned word (‘{word}’). Message deleted."
+                f"T.A.R.S. Warning {count}/3: Use of banned word (â€˜{word}â€™). Message deleted."
             )
         await send_mod_log(
             g,
@@ -161,7 +175,7 @@ async def handle_moderation(message):
         return
     if NWORD_PATTERN.search(text):
         reaction = random.choice([
-            "Interesting choice of words… not recommended.",
+            "Interesting choice of wordsâ€¦ not recommended.",
             "Attempting human chaos detected. Deleting."
         ])
         count = await helper_warn(message, reaction, uid)
@@ -178,7 +192,7 @@ async def handle_moderation(message):
     for pat in SUICIDE_PATTERNS:
         if pat.search(text):
             reaction = random.choice([
-                "Protocol violation. That’s a negative.",
+                "Protocol violation. Thatâ€™s a negative.",
                 "Error detected: inappropriate content. Executing deletion."
             ])
             count = await helper_warn(message, reaction, uid)
@@ -295,7 +309,7 @@ async def helper_warn(message, reaction, uid):
 
 
 async def send_mod_log(guild: discord.Guild, message: str, ping_staff: bool = False):
-    log_channel = discord.utils.get(guild.text_channels, name="?-???tars-logs")
+    log_channel = _get_mod_log_channel(guild)
 
     if not log_channel:
         if not guild.me.guild_permissions.manage_channels:
@@ -306,7 +320,7 @@ async def send_mod_log(guild: discord.Guild, message: str, ping_staff: bool = Fa
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 guild.me: discord.PermissionOverwrite(view_channel=True)
             }
-            log_channel = await guild.create_text_channel("?-???tars-logs", overwrites=overwrites)
+            log_channel = await guild.create_text_channel(MOD_LOG_CHANNEL_NAME, overwrites=overwrites)
         except Exception as e:
             logger.exception(f"Could not create log channel: {e}")
             return
