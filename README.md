@@ -4,7 +4,7 @@ T.A.R.S. is a Discord bot for a private server with moderation, utility, and lig
 ## Features
 - Moderation and safety: auto-moderation hooks, reports, lock/slowmode tools, and a configurable banned-word list.
 - Utility automation: reminders, message quoting, and server/user diagnostics.
-- Community engagement: chat revive prompts, MOTD rotation, and fun commands like dice and 8-ball.
+- Community engagement: MOTD rotation and fun commands like dice and 8-ball.
 - Boost points: reward boosters and let them redeem perks through a simple shop flow.
 
 ## Quick Start
@@ -16,7 +16,7 @@ T.A.R.S. is a Discord bot for a private server with moderation, utility, and lig
    - `DISCORD_TOKEN`
    - `OWNER_ID`
    - `GUILD_ID`
-   - `OPENAI_API_KEY` (optional, required for AI replies and revive prompts)
+   - `OPENAI_API_KEY` (optional, required for AI replies)
 3. Run the bot:
    ```bash
    python tars_bot.py
