@@ -23,16 +23,11 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 GUILD_ID = int(os.getenv("GUILD_ID", "0")) if os.getenv("GUILD_ID") else None
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-REVIVE_CHANNEL_ID = 1424038714266357886
-REVIVE_ROLE_ID = 1430336620447535156
-REVIVE_INTERVAL = 24 * 60 * 60
 CHECK_INTERVAL = 600
-AI_ACCESS_ROLE_ID = 1430704668773716008
+AI_ACCESS_ROLE_ID = 1430704600645898250
 MESSAGE_LIMIT = 10
 RATE_LIMIT_WINDOW = timedelta(hours=1)
 user_message_log = defaultdict(list)
-last_activity_time = None
-revive_sent = False
 OBSERVING_ID = 1003470446517301288
 
 QUIET_HOUR_MULTIPLIER = 2.5
@@ -45,10 +40,8 @@ BOT_VERSION = "6.0.1"
 BOT_START_TIME = datetime.now(timezone.utc)
 
 LAST_ERROR_TIME: datetime | None = None
-LAST_REVIVE_TIME: datetime | None = None
 FEATURE_FLAGS = {
     "ai_enabled": True,
-    "revive_enabled": True,
 }
 ERROR_WINDOW = timedelta(seconds=60)
 ERROR_THRESHOLD = 5
@@ -100,7 +93,6 @@ def record_error():
     if len(ERROR_LOG) >= ERROR_THRESHOLD and not COOLDOWN_UNTIL:
         COOLDOWN_UNTIL = now + COOLDOWN_PERIOD
         FEATURE_FLAGS["ai_enabled"] = False
-        FEATURE_FLAGS["revive_enabled"] = False
         logger.error("Circuit breaker triggered. Features temporarily disabled.")
 
 
@@ -108,7 +100,6 @@ def check_circuit_recovery():
     global COOLDOWN_UNTIL
     if COOLDOWN_UNTIL and datetime.now(timezone.utc) >= COOLDOWN_UNTIL:
         FEATURE_FLAGS["ai_enabled"] = True
-        FEATURE_FLAGS["revive_enabled"] = True
         COOLDOWN_UNTIL = None
         ERROR_LOG.clear()
         logger.info("Circuit breaker reset. Features re-enabled.")
@@ -155,10 +146,8 @@ async def tars_command_help(interaction: discord.Interaction, command_name: str)
 
 
 CONFIG_SCHEMA = {
-    "revive_interval": int,
     "motd_channel_id": (int, type(None)),
     "ai_enabled": bool,
-    "revive_enabled": bool,
 }
 
 AI_USAGE = {
@@ -168,42 +157,6 @@ AI_USAGE = {
     "failures": 0,
 }
 
-
-def get_time_of_day() -> str:
-    hour = datetime.now(timezone.utc).hour
-    if 5 <= hour < 12:
-        return "morning"
-    if 12 <= hour < 18:
-        return "afternoon"
-    if 18 <= hour < 23:
-        return "evening"
-    return "late_night"
-
-
-def get_season() -> str:
-    month = datetime.now(timezone.utc).month
-    if month in (12, 1, 2):
-        return "winter"
-    if month in (3, 4, 5):
-        return "spring"
-    if month in (6, 7, 8):
-        return "summer"
-    return "autumn"
-
-
-REVIVE_STYLE_PROMPTS = {
-    "morning": "Friendly morning icebreaker that encourages people to start chatting.",
-    "afternoon": "Casual, light discussion starter to revive mid-day conversation.",
-    "evening": "Relaxed, social question suitable for evening community chat.",
-    "late_night": "Low-pressure, reflective question suitable for late-night lurkers."
-}
-
-SEASONAL_PROMPTS = {
-    "winter": "Seasonal tone: cozy, reflective, or end-of-year energy.",
-    "spring": "Seasonal tone: fresh ideas, plans, and motivation.",
-    "summer": "Seasonal tone: relaxed, fun, or social energy.",
-    "autumn": "Seasonal tone: thoughtful, nostalgic, or analytical.",
-}
 
 
 def decay_topics():
@@ -234,7 +187,7 @@ intents.guilds = True
 intents.reactions = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
-from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS, AI_PROHIBITED_PATTERNS, CHANNEL_THEMES
+from config import DB_FILE, recent_joins, recent_message_history, BANNED_WORDS, AI_PROHIBITED_PATTERNS
 from tars import tars_text
 
 import random
@@ -398,111 +351,12 @@ async def init_db():
                                 time
                                 TEXT
                             )""")
-        await db.execute("""
-                         CREATE TABLE IF NOT EXISTS revive_history
-                         (
-                             id
-                             INTEGER
-                             PRIMARY
-                             KEY
-                             AUTOINCREMENT,
-                             question
-                             TEXT
-                             NOT
-                             NULL,
-                             time
-                             TEXT
-                             NOT
-                             NULL
-                         )
-                         """)
-        await db.commit()
-
-
-async def get_quiet_settings():
-    percentile = await get_config("quiet_hours_percentile", QUIET_PERCENTILE)
-    multiplier = await get_config("quiet_hours_multiplier", QUIET_HOUR_MULTIPLIER)
-    fb_start = await get_config("quiet_hours_fallback_start", QUIET_FALLBACK_START)
-    fb_end = await get_config("quiet_hours_fallback_end", QUIET_FALLBACK_END)
-    min_days = await get_config("quiet_hours_min_days", 7)
-    return {
-        "percentile": float(percentile),
-        "multiplier": float(multiplier),
-        "fallback_start": int(fb_start),
-        "fallback_end": int(fb_end),
-        "min_days": int(min_days),
-    }
-
-
-def _is_in_fallback_quiet_window(hour: int, start: int, end: int) -> bool:
-    # Handles ranges that may wrap around midnight (e.g., 22 -> 6)
-    if start == end:
-        return False
-    if start < end:
-        return start <= hour < end
-    # wrapped
-    return hour >= start or hour < end
-
-
-async def is_quiet_now() -> tuple[bool, float]:
-    settings = await get_quiet_settings()
-    hour = datetime.now(timezone.utc).hour
-    quiet = _is_in_fallback_quiet_window(hour, settings["fallback_start"], settings["fallback_end"])
-    mult = settings["multiplier"] if quiet else 1.0
-    try:
-
-        mult = max(1.0, float(mult))
-    except Exception as e:
-        logger.warning(f"{e}, Invalid quiet multiplier: {mult}. Using default 1.0.")
-        mult = 1.0
-    return quiet, mult
-
-
-async def get_recent_revives(limit: int = 10) -> list[str]:
-    async with aiosqlite.connect(DB_FILE) as db:
-        cur = await db.execute(
-            "SELECT question FROM revive_history ORDER BY id DESC LIMIT ?",
-            (limit,)
-        )
-        rows = await cur.fetchall()
-        return [r[0] for r in rows]
-
-
-async def save_revive_question(question: str):
-    async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute(
-            "INSERT INTO revive_history (question, time) VALUES (?, ?)",
-            (question, datetime.now(timezone.utc).isoformat())
-        )
-        await db.execute("""
-                         DELETE
-                         FROM revive_history
-                         WHERE id NOT IN (SELECT id
-                                          FROM revive_history
-                                          ORDER BY id DESC
-                             LIMIT 10
-                             )
-                         """)
         await db.commit()
 
 
 scheduler = AsyncIOScheduler()
 MOTD_LIST = []
 motd_index = 0
-
-
-async def get_effective_revive_interval() -> float:
-    """Return the base revive interval in seconds, considering live config overrides.
-
-    Ensures it's at least the compiled default to avoid accidental speed-ups.
-    """
-    cfg_val = await get_config("revive_interval", REVIVE_INTERVAL)
-    try:
-        base = float(cfg_val)
-    except Exception as e:
-        logger.warning(f"{e}, Invalid revive interval: {cfg_val}. Using default {REVIVE_INTERVAL}.")
-        base = float(REVIVE_INTERVAL)
-    return max(float(REVIVE_INTERVAL), base)
 
 
 async def get_config(key: str, default=None):
@@ -532,13 +386,6 @@ async def on_ready():
     scheduler.add_job(check_circuit_recovery, "interval", minutes=1)
     scheduler.add_job(decay_topics, "interval", hours=1)
     scheduler.add_job(prune_hourly_activity, "interval", hours=1)
-    scheduler.add_job(
-        lambda: bot.loop.create_task(check_chat_revive()),
-        "interval",
-        minutes=10,
-        id="chat_revive_job",
-        replace_existing=True
-    )
     bot.loop.create_task(update_presence())
     motd = await get_config("motd_list", [])
     global MOTD_LIST, motd_index
@@ -839,15 +686,11 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_message(message: discord.Message):
-    global last_activity_time, revive_sent
     if message.author.bot:
         return
     if message.guild is None or not isinstance(message.author, discord.Member):
         await bot.process_commands(message)
         return
-    if message.channel.id == REVIVE_CHANNEL_ID:
-        last_activity_time = datetime.now(timezone.utc)
-        revive_sent = False
     channel_id = str(message.channel.id)
     now = datetime.now(timezone.utc)
     if channel_id not in recent_message_history:
@@ -905,7 +748,6 @@ async def on_message(message: discord.Message):
 async def slash_tars(interaction: discord.Interaction, command: str | None = None):
     version = BOT_VERSION
     ai_status = "ONLINE" if FEATURE_FLAGS["ai_enabled"] else "OFFLINE"
-    revive_status = "ONLINE" if FEATURE_FLAGS["revive_enabled"] else "OFFLINE"
     if command:
         await tars_command_help(interaction, command)
         return
@@ -914,7 +756,6 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
         f"**Version:** `{version}`\n\n"
         f"**Subsystem Status**\n"
         f"� AI: `{ai_status}`\n"
-        f"� Chat Revive: `{revive_status}`\n\n"
         "Use `/tars help <command>` for detailed command info.",
         "info"
     )
@@ -1086,70 +927,6 @@ async def send_reminder(user_id, channel_id, text):
         except Exception as e:
             logger.info(f"Unable to send reminder to {user}: " + str(e))
             await handle_error(e)
-
-
-async def check_chat_revive():
-    global last_activity_time, revive_sent
-    channel = bot.get_channel(REVIVE_CHANNEL_ID)
-    if not channel:
-        logger.error("Revive channel not found.")
-        return
-    time_style = get_time_of_day()
-    season = get_season()
-    style_prompt = REVIVE_STYLE_PROMPTS.get(time_style, "")
-    season_prompt = SEASONAL_PROMPTS.get(season, "")
-    channel_theme = CHANNEL_THEMES.get(channel.id, "Open-ended discussion starter")
-    role = channel.guild.get_role(REVIVE_ROLE_ID)
-    if not role:
-        logger.error("Revive role not found.")
-        return
-    if not FEATURE_FLAGS["revive_enabled"]:
-        return
-    if last_activity_time is None:
-        try:
-            async for msg in channel.history(limit=1):
-                last_activity_time = msg.created_at
-                break
-        except Exception as e:
-            logger.error(f"History read failed: {e}")
-            return
-        if last_activity_time is None:
-            last_activity_time = datetime.now(timezone.utc)
-    inactivity = (datetime.now(timezone.utc) - last_activity_time).total_seconds()
-    # Use effective base interval (min 24h) and slow down during quiet hours
-    base_interval = await get_effective_revive_interval()
-    quiet, multiplier = await is_quiet_now()
-    dynamic_interval = base_interval * multiplier
-    if inactivity < dynamic_interval or revive_sent:
-        return
-    logger.info(
-        f"[Revive Check] inactivity={inactivity:.0f}s revive_sent={revive_sent} "
-        f"quiet={quiet} multiplier={multiplier} interval={dynamic_interval:.0f}s"
-    )
-    recent_questions = await get_recent_revives()
-    avoid_text = ""
-    if recent_questions:
-        avoid_text = (
-                "Avoid reusing or closely paraphrasing these recent questions:\n"
-                + "\n".join(f"- {q}" for q in recent_questions)
-        )
-    prompt = (
-        f"{style_prompt}\n"
-        f"{season_prompt}\n"
-        f"Theme: {channel_theme}\n\n"
-        "Generate ONE single-sentence question.\n"
-        "No emojis. No lists. No meta commentary.\n"
-        "Be natural, engaging, and non-repetitive.\n\n"
-        f"{avoid_text}"
-    )
-    question = await tars_ai_respond(prompt, "T.A.R.S.")
-    global LAST_REVIVE_TIME
-    LAST_REVIVE_TIME = datetime.now(timezone.utc)
-    await save_revive_question(question)
-    safe_question = sanitize_discord_mentions(question)
-    await channel.send(f"{role.mention} � {safe_question}")
-    revive_sent = True
-    logger.info("Chat revive sent successfully.")
 
 
 @tree.command(name="reactionrole", description="Create a reaction role (admin only)")
@@ -1574,10 +1351,6 @@ async def slash_status(interaction: discord.Interaction):
     scheduler_running = scheduler.running
     openai_ok = await check_openai_health()
     db_ok = await check_db_health()
-    revive_time = (
-        LAST_REVIVE_TIME.isoformat(timespec="seconds")
-        if LAST_REVIVE_TIME else "Never"
-    )
     error_time = (
         LAST_ERROR_TIME.isoformat(timespec="seconds")
         if LAST_ERROR_TIME else "None"
@@ -1600,8 +1373,6 @@ async def slash_status(interaction: discord.Interaction):
         inline=True
     )
     embed.add_field(name="AI Enabled", value=str(FEATURE_FLAGS["ai_enabled"]), inline=True)
-    embed.add_field(name="Revive Enabled", value=str(FEATURE_FLAGS["revive_enabled"]), inline=True)
-    embed.add_field(name="Last Revive Sent", value=revive_time, inline=False)
     embed.add_field(name="Last Error", value=error_time, inline=False)
     embed.set_footer(text="� T.A.R.S. Diagnostics")
     await interaction.response.send_message(embed=embed, ephemeral=True)
