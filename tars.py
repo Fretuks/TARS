@@ -1,4 +1,4 @@
-﻿import random
+import random
 def tars_text(text: str, category: str = "default") -> str:
     variants = {
         "success": [

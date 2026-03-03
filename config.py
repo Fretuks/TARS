@@ -1,4 +1,4 @@
-﻿import re
+import re
 
 DB_FILE = "tars_bot.db"
 NWORD_PATTERN = re.compile(r'\bn+[i1!|]+[g9]+[e3]+r+s*\b', re.IGNORECASE)
