@@ -755,7 +755,7 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
         f"T.A.R.S. online. Systems nominal.\n"
         f"**Version:** `{version}`\n\n"
         f"**Subsystem Status**\n"
-        f"� AI: `{ai_status}`\n"
+        f"AI: `{ai_status}`\n"
         "Use `/tars help <command>` for detailed command info.",
         "info"
     )
@@ -767,7 +767,7 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
             cmd = all_commands.get(name)
             if not cmd:
                 continue
-            lines.append(f"/{cmd.name} � {cmd.description}")
+            lines.append(f"/{cmd.name}: {cmd.description}")
 
         if lines:
             embeds.append(
