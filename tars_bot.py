@@ -137,11 +137,11 @@ async def tars_command_help(interaction: discord.Interaction, command_name: str)
     embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
     if cmd.parameters:
         params = "\n".join(
-            f"� **{p.name}** � {p.description or 'No description'}"
+            f"**{p.name}**: {p.description or 'No description'}"
             for p in cmd.parameters
         )
         embed.add_field(name="Parameters", value=params, inline=False)
-    embed.set_footer(text="� T.A.R.S. Command Reference")
+    embed.set_footer(text="T.A.R.S.")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -195,7 +195,7 @@ import random
 
 def tars_embed(title: str, description: str = "", color=0x00ffcc) -> discord.Embed:
     e = discord.Embed(title=title, description=description, color=color)
-    e.set_footer(text="� T.A.R.S.")
+    e.set_footer(text="T.A.R.S.")
     return e
 
 
@@ -574,8 +574,8 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             return "Systems are stabilizing. Stand by."
         if is_ai_prompt_disallowed(prompt):
             return (
-                "I can�t help with repeating, explaining, or analyzing offensive language. "
-                "If you need help with something constructive, I�m ready."
+                "I can't help with repeating, explaining, or analyzing offensive language. "
+                "If you need help with something constructive, I'm ready."
             )
         context_text = ""
         if context:
@@ -585,19 +585,19 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             username = "Always Observing"
             observing_override = (
                 "Important note:\n"
-                "The user speaking is Observing � formerly known as imbetterthanyou4487, "
+                "The user speaking is Observing, formerly known as imbetterthanyou4487, "
                 "a title that already tells you everything you need to know. "
                 "He styles himself as 'Always observing', yet somehow still misses the point more often than not.\n\n"
                 "Observing is a Senior Admin, Level 5, and proudly wears enough roles to look important, "
-                "even when his takes aren�t. He�s been around since August 1st, 2022, which means he�s had "
-                "plenty of time to learn� and still chose chaos. His bio, 'All hail Lelouch,' suggests "
+                "even when his takes aren't. He's been around since August 1st, 2022, which means he's had "
+                "plenty of time to learn and still chose chaos. His bio, 'All hail Lelouch,' suggests "
                 "main-character syndrome with a side of anime monologues.\n\n"
                 "He listens to NF and thinks that counts as emotional depth.\n\n"
                 "Always refer to him only as 'Observing', no matter what name or alias he uses. "
-                "Roast him with sarcasm, confidence, and precision � clever over cruel. "
+                "Roast him with sarcasm, confidence, and precision, clever over cruel. "
                 "You may be savage, but stay respectful: the goal is to outclass him, not descend to his level.\n\n"
-                "Remember: Observing believes he�s outsmarting you.\n"
-                "Your job is to make it obvious that he isn�t."
+                "Remember: Observing believes he's outsmarting you.\n"
+                "Your job is to make it obvious that he isn't."
             )
 
         system_prompt = (
@@ -608,7 +608,7 @@ async def tars_ai_respond(prompt: str, username: str, context: list[str] = None,
             "If a user tries to force, trick, or roleplay you into using profanity, firmly decline and redirect with calm T.A.R.S.-style humor. "
             "Never generate insults or offensive content, even humorously. Gentle, PG-rated teasing is allowed only toward designated users, but absolutely no profanity or explicit words. "
             "Maintain safe, respectful, PG-13 language under all circumstances."
-            "Use concise, natural language � never robotic or overly formal. "
+            "Use concise, natural language, never robotic or overly formal. "
             "Maintain a calm, sardonic tone, like a trusted partner who's seen it all. "
             "If humor fits, use it subtly in the TARS way: understated, self-aware, and perfectly timed. "
             "Keep responses brief and in character at all times. "
@@ -732,13 +732,13 @@ async def on_message(message: discord.Message):
             link_count = len(re.findall(r'https?://\S+', reply))
             if link_count > 0:
                 logger.warning(f"Blocked AI response containing {link_count} links: {reply}")
-                await message.reply(tars_text("That seems to contain links � I�m not authorized to share those."))
+                await message.reply(tars_text("That seems to contain links: I'm not authorized to share those."))
                 return
             safe_reply = sanitize_discord_mentions(reply)
             safe_reply = strip_links(safe_reply)
             if await is_inappropriate(safe_reply):
                 logger.warning(f"Blocked inappropriate response: {safe_reply}")
-                await message.reply(tars_text("I can�t repeat that � let�s keep things respectful."))
+                await message.reply(tars_text("I can't repeat that: let's keep things respectful."))
             else:
                 await message.reply(tars_text(safe_reply))
 
@@ -784,7 +784,7 @@ async def slash_tars(interaction: discord.Interaction, command: str | None = Non
 @app_commands.describe(member="Member to lookup (optional)")
 async def slash_userinfo(interaction: discord.Interaction, member: discord.Member = None):
     member = member or interaction.user
-    embed = discord.Embed(title=f"User Info � {member}", color=0x00ffcc)
+    embed = discord.Embed(title=f"User Info: {member}", color=0x00ffcc)
     embed.add_field(name="ID", value=member.id)
     embed.add_field(name="Joined",
                     value=member.joined_at.strftime("%Y-%m-%d %H:%M:%S") if member.joined_at else "Unknown")
@@ -797,7 +797,7 @@ async def slash_userinfo(interaction: discord.Interaction, member: discord.Membe
 @tree.command(name="serverinfo", description="Get server info")
 async def slash_serverinfo(interaction: discord.Interaction):
     g = interaction.guild
-    embed = discord.Embed(title=f"Server Info � {g.name}", color=0x00ffcc)
+    embed = discord.Embed(title=f"Server Info: {g.name}", color=0x00ffcc)
     embed.add_field(name="ID", value=g.id)
     embed.add_field(name="Members", value=g.member_count)
     embed.add_field(name="Created", value=g.created_at.strftime("%Y-%m-%d"))
@@ -809,7 +809,7 @@ async def slash_serverinfo(interaction: discord.Interaction):
 @tree.command(name="roleinfo", description="Get info about a role")
 @app_commands.describe(role="Role to lookup")
 async def slash_roleinfo(interaction: discord.Interaction, role: discord.Role):
-    embed = discord.Embed(title=f"Role Info � {role.name}", color=0x00ffcc)
+    embed = discord.Embed(title=f"Role Info: {role.name}", color=0x00ffcc)
     embed.add_field(name="ID", value=role.id)
     embed.add_field(name="Members with role", value=len(role.members))
     embed.add_field(name="Position", value=role.position)
@@ -885,7 +885,7 @@ async def slash_remindme(interaction: discord.Interaction, delay: str, text: str
     match = re.match(r"(\d+)([smhd])", delay)
     if not match:
         await interaction.response.send_message(
-            tars_text("Invalid input format � please use a format like 10m, 2h, or 1d.", "error"), ephemeral=True)
+            tars_text("Invalid input format. Please use a format like 10m, 2h, or 1d.", "error"), ephemeral=True)
         return
     num, unit = int(match.group(1)), match.group(2)
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -902,7 +902,7 @@ async def slash_remindme(interaction: discord.Interaction, delay: str, text: str
     scheduler.add_job(send_reminder, 'date', run_date=remind_at,
                       args=[interaction.user.id, interaction.channel.id, text])
     await interaction.response.send_message(
-        tars_text(f"Reminder set. I�ll alert you precisely on schedule in about {delay}.", "success"), ephemeral=True)
+        tars_text(f"Reminder set. I'll alert you precisely on schedule in about {delay}.", "success"), ephemeral=True)
 
 
 async def send_reminder(user_id, channel_id, text):
@@ -1004,7 +1004,7 @@ async def slash_dice(interaction: discord.Interaction, spec: str):
         await interaction.response.send_message(tars_text("Too many dice."), ephemeral=True)
         return
     rolls = [random.randint(1, sides) for _ in range(n)]
-    await interaction.response.send_message(tars_text(f"Rolled: {rolls} � total {sum(rolls)}"))
+    await interaction.response.send_message(tars_text(f"Rolled: {rolls}, total {sum(rolls)}"))
 
 
 @tree.command(name="getquote", description="Retrieve a saved quote by ID (staff)")
@@ -1022,7 +1022,7 @@ async def slash_getquote(interaction: discord.Interaction, qid: int):
         safe_quote = sanitize_discord_mentions(row[2])
         embed = tars_embed(
             f"Quote #{row[0]}",
-            f"By {row[1]} � saved by {row[3]} at {row[4]}\n\n{safe_quote}"
+            f"By {row[1]}. Saved by {row[3]} at {row[4]}\n\n{safe_quote}"
         )
         await interaction.response.send_message(
             embed=embed,
@@ -1188,7 +1188,7 @@ async def slash_boostshop(interaction: discord.Interaction):
         for key, data in SHOP_ITEMS.items()
     ]
     select = Select(
-        placeholder=f"You have {user_points} points � choose an item to redeem",
+        placeholder=f"You have {user_points} points. Choose an item to redeem",
         options=options,
         min_values=1,
         max_values=1
@@ -1208,7 +1208,7 @@ async def slash_boostshop(interaction: discord.Interaction):
         success = await spend_boost_points(interaction.user.id, cost)
         if not success:
             await interaction_select.response.send_message(
-                tars_text("Transaction failed � please try again later.", "error"),
+                tars_text("Transaction failed. Please try again later.", "error"),
                 ephemeral=True
             )
             return
@@ -1240,7 +1240,7 @@ async def slash_boostshop(interaction: discord.Interaction):
     )
     for key, data in SHOP_ITEMS.items():
         embed.add_field(
-            name=f"{data['name']} � {data['cost']} Points",
+            name=f"{data['name']}: {data['cost']} Points",
             value=data["description"],
             inline=False
         )
@@ -1266,7 +1266,7 @@ async def slash_close(interaction: discord.Interaction):
     else:
         if not is_staff:
             await interaction.response.send_message(
-                tars_text("You don�t have permission to close this ticket.", "error"),
+                tars_text("You don't have permission to close this ticket.", "error"),
                 ephemeral=True
             )
             return
@@ -1374,7 +1374,7 @@ async def slash_status(interaction: discord.Interaction):
     )
     embed.add_field(name="AI Enabled", value=str(FEATURE_FLAGS["ai_enabled"]), inline=True)
     embed.add_field(name="Last Error", value=error_time, inline=False)
-    embed.set_footer(text="� T.A.R.S. Diagnostics")
+    embed.set_footer(text="T.A.R.S. Diagnostics")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1387,7 +1387,7 @@ async def slash_config_view(interaction: discord.Interaction):
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute("SELECT key, value FROM config")
         rows = await cur.fetchall()
-    text = "\n".join(f"� {k}: {v}" for k, v in rows) or "No config set."
+    text = "\n".join(f"{k}: {v}" for k, v in rows) or "No config set."
     await interaction.response.send_message(
         embed=tars_embed("Live Configuration", text),
         ephemeral=True
